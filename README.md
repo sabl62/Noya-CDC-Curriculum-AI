@@ -474,7 +474,7 @@ The frontend features a clean, minimal design built with Tailwind CSS and React.
   <img src="docs/screenshots/subject.png" alt="Subject Selection" width="200">
   <img src="docs/screenshots/chat.png" alt="Chat" width="200">
   <img src="docs/screenshots/login.png" alt="Login" width="200">
-  <img src="docs/screenshots/signup.png" alt="Dark Mode" width="200">
+  <img src="docs/screenshots/signup.png" alt="Signup" width="200">
 </p>
 
 <p align="center">
