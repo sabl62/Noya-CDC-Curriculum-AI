@@ -469,5 +469,3 @@ MIT
 <p align="center">
   <strong>Developed, Designed, and Created by Sabal Bajagain</strong>
 </p>
-#   N o y a - C D C - C u r r i c u l u m - A I  
- 
