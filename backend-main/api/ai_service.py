@@ -62,6 +62,8 @@ _GEMINI_FREE_MODEL = "gemini-2.5-flash"
 _GEMINI_PAID_MODEL = "gemini-2.5-pro"
 _DEEPSEEK_MODEL = "deepseek-v4-flash-free"
 _DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
+_CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1"
+_GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
 
 
 class AIService:
@@ -223,11 +225,106 @@ class AIService:
                 return text
         raise Exception("Empty DeepSeek response")
 
+    def _call_cerebras(
+        self, api_key: str, prompt: str, system_prompt: str,
+        max_tokens: int, timeout: int
+    ) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": "llama3.1-8b",
+            "messages": messages,
+            "temperature": 0.5,
+            "max_tokens": max_tokens,
+        }
+        with httpx.Client(timeout=timeout) as http:
+            resp = http.post(
+                _CEREBRAS_ENDPOINT + "/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                content=json.dumps(payload),
+            )
+            if resp.status_code == 429:
+                raise Exception("Cerebras rate limited")
+            resp.raise_for_status()
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if text:
+                return text.strip()
+        raise Exception("Empty Cerebras response")
+
+    def _try_cerebras(self, prompt: str, system_prompt: str, max_tokens: int, timeout: int) -> str:
+        key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+        if not key:
+            return ""
+        try:
+            return self._call_cerebras(key, prompt, system_prompt, max_tokens, timeout)
+        except Exception as e:
+            print(f"[AI] Cerebras error (falling back to heuristic): {e}")
+            return ""
+
+    def _call_groq(
+        self, api_key: str, prompt: str, system_prompt: str,
+        max_tokens: int, timeout: int
+    ) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": "llama3-70b-8192",
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+        }
+        with httpx.Client(timeout=timeout) as http:
+            resp = http.post(
+                _GROQ_ENDPOINT + "/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                content=json.dumps(payload),
+            )
+            if resp.status_code == 429:
+                raise Exception("Groq rate limited")
+            resp.raise_for_status()
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if text:
+                return text.strip()
+        raise Exception("Empty Groq response")
+
+    def _classify_with_groq(self, api_key: str, message: str) -> str:
+        system_prompt = """Classify the following student question into exactly one category.
+Respond with ONLY one word: "simple", "complex", or "diagram".
+
+Rules:
+- "simple": Short factual questions asking for definitions, formulas, values, lists, or straightforward calculations. Usually under 20 words. Starts with what, who, when, where, which, how many, define, list, name, state, write, find, calculate, simplify, solve.
+- "complex": Questions that require explanations, derivations, proofs, comparisons, step-by-step solutions, or exercise problems. Includes why, how does, explain, describe, derive, prove, compare, contrast, elaborate, discuss, justify, relationship. Also exercise/ question numbers.
+- "diagram": Questions asking to draw, sketch, illustrate, show in, represent in, or about venn diagrams, graphs, charts, figures."""
+        prompt = f"Student question: {message}\n\nCategory:"
+        return self._call_groq(api_key, prompt, system_prompt, max_tokens=10, timeout=15)
+
     def _classify_question(self, message: str) -> str:
-        """Rule-based question classifier — no AI calls.
+        """Groq-based classifier with rule-based fallback.
 
         Returns "simple", "complex", or "diagram".
         """
+        key = os.environ.get("GROQ_API_KEY", "").strip()
+        if key:
+            try:
+                result = self._classify_with_groq(key, message)
+                if result in ("simple", "complex", "diagram"):
+                    return result
+            except Exception as e:
+                print(f"[AI] Groq classifier failed (falling back to rules): {e}")
+
+        # Rule-based fallback
         text = (message or "").strip().lower()
 
         # Diagram / image questions → Gemini
@@ -332,7 +429,20 @@ class AIService:
         raise Exception("All providers exhausted: " + " | ".join(errors))
 
     def generate_title(self, user_message: str) -> str:
-        """Fast heuristic title — zero Gemini API calls."""
+        """Generate title via Cerebras LLM, fallback to heuristic if unavailable."""
+        key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+        if key:
+            system_prompt = "Generate a very short title (max 6 words) for a chat session based on the student's first message. Respond with ONLY the title, no punctuation, no quotes."
+            prompt = f"Student message: {user_message}\n\nTitle:"
+            try:
+                result = self._try_cerebras(prompt, system_prompt, max_tokens=20, timeout=15)
+                if result:
+                    result = result.strip().strip('"\'').strip()
+                    if 2 <= len(result.split()) <= 6 and len(result) <= 60:
+                        return result
+            except Exception:
+                pass
+
         title = (user_message or "").strip()
         title = re.sub(r"^(what is|explain|describe|define|how|why|when|where|who)\s+", "", title, flags=re.IGNORECASE)
         title = title.replace("?", "").replace("!", "")

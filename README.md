@@ -458,13 +458,24 @@ The semantic cache is the backbone of Noya's performance. After each AI-generate
 
 Over time, the cache **compounds** — every answered question becomes free for every future student. Common questions saturate the cache, and the system serves 90%+ of requests without touching the LLM.
 
----
+UI Preview:
 
-## License
+The frontend features a clean, minimal design built with Tailwind CSS and React. Key UI components include:
 
-MIT
+- **Subject Selection Grid**: Browse available subjects (Science, Mathematics, English) and chapters
+- **Chat View**: Real-time messaging interface with streaming responses
+- **Markdown Renderer**: KaTeX-powered LaTeX math rendering, syntax-highlighted code blocks, and interactive tooltips for difficult vocabulary
+- **Dark/Light Theme**: Automatic system preference detection with manual toggle option
+- **Session Management**: Create, save, load, and delete chat conversations
+- **Responsive Design**: Mobile-first layout with adaptive navigation
 
----
+<p align="center">
+  <img src="docs/screenshots/landing.png" alt="Landing" width="200">
+  <img src="docs/screenshots/subject.png" alt="Subject Selection" width="200">
+  <img src="docs/screenshots/chat.png" alt="Chat" width="200">
+  <img src="docs/screenshots/login.png" alt="Login" width="200">
+  <img src="docs/screenshots/signup.png" alt="Dark Mode" width="200">
+</p>
 
 <p align="center">
   <strong>Developed, Designed, and Created by Sabal Bajagain</strong>

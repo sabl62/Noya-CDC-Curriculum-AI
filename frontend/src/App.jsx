@@ -36,7 +36,7 @@ const ProtectedRoute = ({ children }) => {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
-        <span className="text-sm text-[var(--pine)] animate-pulse">Loading...</span>
+        <img src={noyaLogo} alt="" className="h-12 w-12 animate-[spin_1.5s_linear_infinite]" />
       </div>
     );
   }
@@ -245,7 +245,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
 
       <section className="quote-band">
         <p>
-          "The best tutor is not louder than the textbook. It makes the page easier to enter."
+          <strong>Noya</strong> -Shortest path from confusion to conclusion. 
         </p>
       </section>
 
@@ -354,7 +354,7 @@ function AppContent() {
   if (isValidating || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
-        <span className="text-sm text-[var(--pine)] animate-pulse">Loading...</span>
+        <img src={noyaLogo} alt="" className="h-12 w-12 animate-[spin_1.5s_linear_infinite]" />
       </div>
     );
   }
