@@ -1,0 +1,54 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+.kilo/
+.qodo/
+.agents/
+
+# OS
+.DS_Store
+Thumbs.db
+*.DS_Store
+
+# Build
+dist/
+build/
+.next/
+
+# Logs
+logs/
+*.log
+
+# Database
+db.sqlite3
+
+# Django
+staticfiles/
+media/
+
+# Project artifacts
+tmp/
+files.zip
