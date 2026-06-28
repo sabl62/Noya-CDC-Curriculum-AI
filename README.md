@@ -52,16 +52,16 @@ The product philosophy: *"A calm study companion that reads with you, answers fr
 
 - **Textbook-Grounded AI Chat** — RAG-powered answers sourced from CDC PDFs with page-level citations
 - **Subject & Chapter Selection** — Science, Mathematics, Optional Mathematics, English (Social Studies & Nepali coming soon)
-- **Streaming Responses** — Real-time word-by-word answer generation for a natural reading experience
+- **Streaming Responses** — word-by-word answer generation preview for a natural reading experience
 - **4-Tier Semantic Cache** — In-memory LRU → DB fingerprint → Knowledge Base → Fuzzy semantic matching
 - **JWT Authentication** — Secure register/login with access + refresh token rotation
-- **Dark / Light Theme** — Clean, minimal, Apple-inspired design with full CSS custom property theming
+- **Dark / Light Theme** — Clean, minimal design with full CSS custom property theming
 - **Markdown + LaTeX Rendering** — KaTeX-powered math expressions, syntax-highlighted code blocks, interactive tooltips for hard words
 - **Chat Sessions** — Create, save, load, and delete conversation histories
-- **Free & Paid Plans** — Stripe billing integration with plan-based model selection
+- **Free & Paid Plans** — billing integration with plan-based model selection
 - **Referral System** — Built-in referral code generation and tracking
 - **Analytics** — Event tracking and per-user usage statistics
-- **Accessibility** — Keyboard navigation, ARIA labels, reduced-motion support, semantic HTML
+
 
 ---
 
