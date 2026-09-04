@@ -1,12 +1,12 @@
-PGvector + PYQ Analytical Responses + PYQ References (Tmrw)
+PGvector + PYQ Analytical Responses + PYQ References
 
-Minor Bugs Fix (Saturday, NW)
-MAJOR AI OPTIMIZATION (Sunday, NW)              
+Minor Bugs Fix
+MAJOR AI OPTIMIZATION            
 
-Github Push (Saturday, ANW)
-First Steps for hosting (Sunday, ANW)
 
-User Research + Testing (AE)
-Production Ready Changes (AE)
+First Steps for hosting
 
-Product Launch (HAE)
+User Research + Testing 
+Production Ready Changes 
+
+Product Launch 
