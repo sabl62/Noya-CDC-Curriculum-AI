@@ -20,7 +20,7 @@ backend/__pycache__/
 
 # Data / cache
 chroma_data/
-cdc_curriculum/
+
 ocr_cache/
 
 # Project artifacts
