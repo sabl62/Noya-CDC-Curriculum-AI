@@ -1,0 +1,42 @@
+# Environment
+.env
+.env.local
+.env.prod
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Django
+db.sqlite3
+static/
+staticfiles/
+media/
+api/migrations/__pycache__/
+backend/__pycache__/
+
+# Data / cache
+chroma_data/
+cdc_curriculum/
+ocr_cache/
+
+# Project artifacts
+0.1.0
+error.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
