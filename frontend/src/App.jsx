@@ -27,6 +27,7 @@ import ChatView from "./components/ChatView.jsx";
 import SubjectSelection from "./components/SubjectSelection.jsx";
 import Login from "./components/Login.jsx";
 import Signup from "./components/SignUp.jsx";
+import BillingPage from "./components/BillingPage.jsx";
 import { useAuth, AuthProvider } from "./context/AuthContext.jsx";
 import { authAPI } from "./services/api";
 import noyaLogo from "./assets/noya-logo.svg";
@@ -122,7 +123,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
           <Link to="/signup" className="primary-cta">
             Start studying <ArrowRight size={18} aria-hidden="true" />
           </Link>
-          <Link to="/login" className="secondary-cta">Open your account</Link>
+          <Link to="/login" className="secondary-cta">Log In</Link>
         </div>
       </div>
     </section>
@@ -400,6 +401,14 @@ function AppContent() {
             }
           />
           <Route path="/pricing" element={<Navigate to="/" replace />} />
+          <Route
+            path="/billing"
+            element={
+              <ProtectedRoute>
+                <BillingPage theme={theme} onToggleTheme={toggleTheme} />
+              </ProtectedRoute>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

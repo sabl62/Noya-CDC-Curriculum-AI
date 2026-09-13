@@ -7,20 +7,21 @@ import {
   ChevronRight,
   CirclePlus,
   Clock3,
+  Copy,
   LogOut,
-  Menu,
-  MoonStar,
   PanelLeftClose,
   PenLine,
-  Sparkles,
-  SunMedium,
+  Settings,
   UserRound,
+  X,
+  Zap,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { API_URL, chatAPI } from "../services/api";
 import { useAuth } from "../context/AuthContext.jsx";
-import { findSubject } from "../data/curriculum.js";
+import { findSubject, SUBJECTS } from "../data/curriculum.js";
 import MarkdownRenderer from "./MarkdownRenderer.jsx";
+import SettingsModal from "./SettingsModal.jsx";
 import noyaLogo from "../assets/noya-logo.svg";
 
 const quickPrompts = [
@@ -77,6 +78,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [sourcesPanel, setSourcesPanel] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -420,9 +423,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         user={user}
-        theme={theme}
-        onToggleTheme={onToggleTheme}
         onLogout={handleLogout}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       {mobileSidebarOpen && (
@@ -434,27 +436,6 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       )}
 
       <main className="chat-main">
-        <header className="chat-topbar">
-          <button
-            onClick={() => setMobileSidebarOpen(true)}
-            aria-label="Open sidebar"
-            className="chat-icon-button lg:hidden"
-          >
-            <Menu size={19} aria-hidden="true" />
-          </button>
-          <div>
-            <p>{chapterContext || subjectContext || "Noya Study Chat"}</p>
-            {/* <span>{hasContext ? "Focused on your selected lesson" : "Ask a clear study question to begin"}</span> */}
-          </div>
-          <button
-            onClick={() => resetChat({ goToSubjectSelection: true })}
-            className="chat-new-button"
-          >
-            <CirclePlus size={16} aria-hidden="true" />
-            <span>New</span>
-          </button>
-        </header>
-
         <section aria-live="polite" aria-relevant="additions" className="chat-scroll" ref={scrollContainerRef}>
           <div className="chat-thread">
             {!messages.length && !loading && (
@@ -466,7 +447,11 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
             )}
 
             {messages.map((message, index) => (
-              <MessageItem key={`${message.role}-${index}-${message.id || ""}`} message={message} />
+              <MessageItem
+                key={`${message.role}-${index}-${message.id || ""}`}
+                message={message}
+                onOpenSources={(sourceData) => setSourcesPanel(sourceData)}
+              />
             ))}
 
             <div ref={messagesEndRef} />
@@ -514,7 +499,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
                 onClick={() => setModelDropdownOpen((v) => !v)}
                 disabled={loading || isTyping}
               >
-                <Sparkles size={14} aria-hidden="true" />
+                {/* <Sparkles size={14} aria-hidden="true" /> */}
                 <span>{selectedModel.name}</span>
                 <ChevronDown size={14} aria-hidden="true" className={modelDropdownOpen ? "rotated" : ""} />
               </button>
@@ -554,7 +539,35 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           </form>
           <p className="chat-disclaimer">Answers can make mistakes. Check important facts with your textbook or teacher.</p>
         </footer>
+
+        {user?.plan_tier !== "paid" && (
+          <a href="/billing" className="chat-floating-upgrade">
+            <Zap size={15} />
+            <span>Upgrade to Pro</span>
+          </a>
+        )}
       </main>
+      {sourcesPanel && (
+        <SourcesPanel
+          source={sourcesPanel.source}
+          subject={sourcesPanel.subject}
+          chapter={sourcesPanel.chapter}
+          startPage={sourcesPanel.startPage}
+          endPage={sourcesPanel.endPage}
+          unitTitle={sourcesPanel.unitTitle}
+          chapterTitle={sourcesPanel.chapterTitle}
+          matchedChapter={sourcesPanel.matchedChapter}
+          usedPages={sourcesPanel.usedPages}
+          onClose={() => setSourcesPanel(null)}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+        />
+      )}
     </div>
   );
 };
@@ -610,12 +623,20 @@ const Sidebar = ({
   mobileOpen,
   onCloseMobile,
   user,
-  theme,
-  onToggleTheme,
   onLogout,
+  onOpenSettings,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [popupStyle, setPopupStyle] = useState({});
+  const [highlightPicker, setHighlightPicker] = useState(false);
   const menuRef = useRef(null);
+  const avatarRef = useRef(null);
+  const chapterSelectRef = useRef(null);
+
+  const focusChapterPicker = useCallback(() => {
+    setHighlightPicker(true);
+    setTimeout(() => setHighlightPicker(false), 1500);
+  }, []);
 
   useEffect(() => {
     const handleClick = (event) => {
@@ -628,6 +649,47 @@ const Sidebar = ({
       return () => document.removeEventListener("mousedown", handleClick);
     }
   }, [menuOpen]);
+
+  const computePopupPosition = useCallback(() => {
+    if (!avatarRef.current) return;
+    const rect = avatarRef.current.getBoundingClientRect();
+    const POPUP_H = 220;
+    const POPUP_W = 220;
+    const gap = 10;
+
+    const spaceAbove = rect.top;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceRight = window.innerWidth - rect.right;
+    const spaceLeft = rect.left;
+
+    let top, left;
+
+    // Vertical
+    if (spaceAbove >= POPUP_H + gap) {
+      top = rect.top - POPUP_H - gap;
+    } else if (spaceBelow >= POPUP_H + gap) {
+      top = rect.bottom + gap;
+    } else {
+      top = spaceAbove > spaceBelow ? rect.top - POPUP_H - gap : rect.bottom + gap;
+    }
+
+    // Horizontal
+    if (collapsed) {
+      if (spaceRight >= POPUP_W + gap) {
+        left = rect.right + gap;
+      } else if (spaceLeft >= POPUP_W + gap) {
+        left = rect.left - POPUP_W - gap;
+      } else {
+        left = rect.right + gap;
+      }
+    } else {
+      left = rect.left + rect.width / 2 - POPUP_W / 2;
+      // Clamp to viewport
+      left = Math.max(gap, Math.min(left, window.innerWidth - POPUP_W - gap));
+    }
+
+    setPopupStyle({ position: "fixed", top, left, zIndex: 1000 });
+  }, [collapsed]);
 
   return (
     <aside className={`chat-sidebar ${mobileOpen ? "is-open" : ""} ${collapsed ? "is-collapsed" : ""}`}>
@@ -652,7 +714,11 @@ const Sidebar = ({
             <CirclePlus size={17} aria-hidden="true" />
             {!collapsed && <span>New chat</span>}
           </button>
-          <button onClick={onToggleCollapsed} title="Change chapter" className="chat-secondary-action">
+          <button
+            onClick={() => { if (collapsed) onToggleCollapsed(); else focusChapterPicker(); }}
+            title="Change chapter"
+            className={`chat-secondary-action${collapsed ? " highlight" : ""}`}
+          >
             <BookOpen size={17} aria-hidden="true" />
             {!collapsed && <span>Chapter</span>}
           </button>
@@ -662,11 +728,13 @@ const Sidebar = ({
           <nav aria-label="Conversation history" className="chat-history">
             {subjectContext && availableChapters.length > 0 && (
               <div className="chat-chapter-picker">
-                <label htmlFor="chat-chapter-select">Current chapter</label>
+                <label htmlFor="chat-chapter-select">Chapter</label>
                 <select
+                  ref={chapterSelectRef}
                   id="chat-chapter-select"
                   value={chapterContext || ""}
                   onChange={(event) => onChangeChapter(event.target.value)}
+                  className={highlightPicker ? "highlight" : ""}
                 >
                   {availableChapters.map((chapter) => (
                     <option key={chapter} value={chapter}>
@@ -674,6 +742,16 @@ const Sidebar = ({
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {!subjectContext && (
+              <div className="chat-chapter-picker">
+                <span className="chat-chapter-empty">Select a subject to choose a chapter</span>
+                <button className="chat-secondary-action small" onClick={() => navigate("/subjects")}>
+                  <BookOpen size={15} />
+                  <span>Choose subject</span>
+                </button>
               </div>
             )}
 
@@ -718,28 +796,38 @@ const Sidebar = ({
         <div className="chat-sidebar-footer">
           <div className="chat-user-menu" ref={menuRef}>
             <button
+              ref={avatarRef}
               className="chat-user-avatar-btn"
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={() => { computePopupPosition(); setMenuOpen((v) => !v); }}
               aria-label="User menu"
               aria-expanded={menuOpen}
             >
               <UserRound size={18} aria-hidden="true" />
             </button>
+            {!collapsed && (
+              <span className="chat-user-name">{user?.username || "Guest"}</span>
+            )}
             {menuOpen && (
-              <div className={`chat-user-popup${collapsed ? " is-right" : ""}`}>
+              <div className="chat-user-popup" style={popupStyle}>
                 <div className="chat-user-popup-header">
                   <strong>{user?.username || "Guest"}</strong>
                   <span>{user?.email || ""}</span>
                 </div>
                 <div className="chat-user-popup-plan">
                   <span className={`plan-badge ${user?.plan_tier === "paid" ? "paid" : "free"}`}>
-                    {user?.plan_tier === "paid" ? "Paid" : "Free"}
+                    {user?.plan_tier === "paid" ? "Pro" : "Free"}
                   </span>
                 </div>
                 <div className="chat-user-popup-actions">
-                  <button onClick={onToggleTheme} className="chat-popup-btn">
-                    {theme === "dark" ? <SunMedium size={15} aria-hidden="true" /> : <MoonStar size={15} aria-hidden="true" />}
-                    <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+                  {user?.plan_tier !== "paid" && (
+                    <a href="/billing" className="chat-popup-btn upgrade">
+                      <Zap size={15} aria-hidden="true" />
+                      <span>Upgrade to Pro</span>
+                    </a>
+                  )}
+                  <button onClick={() => { setMenuOpen(false); onOpenSettings?.(); }} className="chat-popup-btn">
+                    <Settings size={15} aria-hidden="true" />
+                    <span>Settings</span>
                   </button>
                   <button onClick={onLogout} className="chat-popup-btn danger">
                     <LogOut size={15} aria-hidden="true" />
@@ -765,7 +853,9 @@ const SessionSkeleton = () => (
   </div>
 );
 
-const MessageItem = ({ message }) => {
+const MessageItem = ({ message, onOpenSources }) => {
+  const [copied, setCopied] = useState(false);
+
   if (message.role === "user") {
     return (
       <article className="chat-message user">
@@ -798,6 +888,67 @@ const MessageItem = ({ message }) => {
     );
   }
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content || "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = message.content || "";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const source = message.source || "";
+  const hasSource = source && source !== "Error" && source !== "Deterministic Grounding Check";
+
+  const parseSource = (sourceStr) => {
+    const parts = sourceStr.split("—").map((s) => s.trim());
+    if (parts.length >= 3) {
+      return { subject: parts[1]?.toLowerCase() || "", chapter: parts[2] || "" };
+    }
+    if (parts.length === 2) {
+      return { subject: parts[0]?.toLowerCase() || "", chapter: parts[1] || "" };
+    }
+    return { subject: "", chapter: "" };
+  };
+
+  const { subject: sourceSubject, chapter: sourceChapter } = parseSource(source);
+
+  const handleOpenSources = () => {
+    const subjectObj = SUBJECTS.find((s) => s.id === sourceSubject);
+    const chapterList = subjectObj?.chapters || [];
+    const matchedChapter = chapterList.find((c) => {
+      const normalized = c.replace(/^\d+\.\s*/, "").toLowerCase();
+      return normalized === sourceChapter.toLowerCase() || sourceChapter.toLowerCase().includes(normalized);
+    });
+
+    const unitTitle = message.unit_title || "";
+    const chapterTitle = message.chapter_title || "";
+
+    const usedPages = [...new Set(
+      (message.content || "").match(/\[Page\s+(\d+)\]/g)?.map((m) => parseInt(m.match(/\d+/)?.[0], 10)) || []
+    )].sort((a, b) => a - b);
+
+    onOpenSources?.({
+      source,
+      subject: sourceSubject,
+      chapter: sourceChapter,
+      startPage: message.start_page || "",
+      endPage: message.end_page || "",
+      unitTitle,
+      chapterTitle,
+      matchedChapter,
+      usedPages,
+    });
+  };
+
   return (
     <article className="chat-message assistant">
       <div className="assistant-mark">
@@ -805,14 +956,104 @@ const MessageItem = ({ message }) => {
       </div>
       <div className="assistant-response">
         <MarkdownRenderer content={typeof message.content === "string" ? message.content : String(message.content || "")} />
-        {/* {message.source && (
-          <div className="assistant-source">
-            <span>From lesson</span>
-            <p>{message.source}</p>
-          </div>
-        )} */}
+        <div className="assistant-actions">
+          <button
+            className="assistant-action-btn"
+            onClick={handleCopy}
+            title="Copy response"
+            aria-label="Copy response"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {/* <span>{copied ? "Copied" : "Copy"}</span> */}
+          </button>
+          {hasSource && (
+            <button
+              className="assistant-action-btn"
+              onClick={handleOpenSources}
+              title="View sources"
+              aria-label="View sources"
+            >
+              <BookOpen size={14} />
+              {/* <span>Sources</span> */}
+            </button>
+          )}
+        </div>
       </div>
     </article>
+  );
+};
+
+const SourcesPanel = ({ source, subject, chapter, startPage, endPage, unitTitle, chapterTitle, matchedChapter, usedPages, onClose }) => {
+  const subjectObj = SUBJECTS.find((s) => s.id === subject);
+  const subjectName = subjectObj?.name || subject;
+  const displayChapter = matchedChapter || chapterTitle || chapter;
+  const displayPage = startPage && endPage ? `${startPage}–${endPage}` : startPage || endPage || "";
+
+  return (
+    <aside className="sources-panel">
+      <div className="sources-panel-header">
+        <div className="sources-panel-title">
+          <BookOpen size={16} />
+          <h3>Source</h3>
+        </div>
+        <button className="sources-panel-close" onClick={onClose} aria-label="Close sources">
+          <X size={15} />
+        </button>
+      </div>
+
+      <div className="sources-panel-body">
+        <div className="sources-panel-section">
+          <div className="sources-panel-row">
+            <span className="sources-panel-dot" />
+            <div className="sources-panel-field">
+              <span className="sources-panel-label">Textbook</span>
+              <span className="sources-panel-value">{subjectName} — Class 10</span>
+            </div>
+          </div>
+
+          {displayChapter && (
+            <div className="sources-panel-row">
+              <span className="sources-panel-dot" />
+              <div className="sources-panel-field">
+                <span className="sources-panel-label">Chapter</span>
+                <span className="sources-panel-value">{displayChapter}</span>
+              </div>
+            </div>
+          )}
+
+          {unitTitle && (
+            <div className="sources-panel-row">
+              <span className="sources-panel-dot" />
+              <div className="sources-panel-field">
+                <span className="sources-panel-label">Unit</span>
+                <span className="sources-panel-value">{unitTitle}</span>
+              </div>
+            </div>
+          )}
+
+          {displayPage && (
+            <div className="sources-panel-row">
+              <span className="sources-panel-dot" />
+              <div className="sources-panel-field">
+                <span className="sources-panel-label">Pages</span>
+                <span className="sources-panel-value">{displayPage}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {usedPages?.length > 0 && (
+          <div className="sources-panel-section">
+            <span className="sources-panel-section-title">Referenced in response</span>
+            <div className="sources-panel-pages">
+              {usedPages.map((p) => (
+                <span key={p} className="sources-panel-page-tag">Pg. {p}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 };
 

@@ -165,6 +165,18 @@ def _set_user_billing_state(user, *, plan_tier=None, provider='', customer_id=''
     user.save(update_fields=list(dict.fromkeys(update_fields)))
 
 
+# ============ CACHE MANAGEMENT ============
+
+class CacheClearView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        from .semantic_cache import get_semantic_cache_service
+        cache = get_semantic_cache_service()
+        cache.clear()
+        return Response({"status": "cache cleared"}, status=200)
+
+
 # ============ AUTH VIEWS ============
 
 class RegisterView(APIView):

@@ -60,6 +60,85 @@ _STUDY_TERMS = {
 
 _GEMINI_FREE_MODEL = "gemini-2.5-flash"
 _GEMINI_PAID_MODEL = "gemini-2.5-pro"
+
+_INVALID_RESPONSE_MARKERS = [
+    "name '", "is not defined", "traceback", "syntaxerror",
+    "typeerror", "indexerror", "keyerror", "attributeerror",
+    ">>> ", "import ", "def ", "print(",
+]
+
+_LATEX_MATH_INSTRUCTIONS = r"""MATH FORMATTING RULES (CRITICAL - follow exactly):
+
+1. EVERY mathematical expression MUST be wrapped in dollar signs. NO exceptions.
+   - Inline math: $\cos 2A = 2\cos^2 A - 1$
+   - Display math (own line): $$\cos 2A = 2\cos^2 A - 1$$
+
+2. NEVER write bare LaTeX commands without $ delimiters. Every single \command must be inside $...$.
+   WRONG: \cos 90^\circ = 0
+   RIGHT: $\cos 90^\circ = 0$
+
+   WRONG: \frac{a}{b} = \sin \theta
+   RIGHT: $\frac{a}{b} = \sin \theta$
+
+   WRONG: 2\cos^2 \left(45^\circ - \frac{A}{2}\right) = 1 + \sin A
+   RIGHT: $2\cos^2 \left(45^\circ - \frac{A}{2}\right) = 1 + \sin A$
+
+3. NEVER use $$ inside an expression. Double $$ is ONLY for display math on its OWN line.
+   WRONG: \frac{A}{2}$$\right)
+   WRONG: $x = \frac{A}{2}$$
+   RIGHT: $\frac{A}{2}$ inside single $, or $$\frac{A}{2}$$ on its own line
+
+4. Each math expression gets its own $ delimiters. Do NOT merge multiple expressions into one $ block unless they are part of the same equation.
+   RIGHT: $\cos 90^\circ = 0$ and $\sin 90^\circ = 1$
+   RIGHT: $\cos 90^\circ = 0$ and $\sin 90^\circ = 1$ (if in same sentence)
+
+5. Use _ for subscripts, ^ for superscripts, \frac{a}{b} for fractions.
+   Example: $\sin^2 A + \cos^2 A = 1$
+   Example: $\tan \frac{A}{2} = \frac{\sin A}{1 + \cos A}$
+
+6. For submultiple angle proofs, wrap the ENTIRE equation in one $ block:
+   RIGHT: $2\cos^2 \left(45^\circ - \frac{A}{2}\right) = 1 + \cos\left(2 \times \left(45^\circ - \frac{A}{2}\right)\right)$
+
+7. NEVER output a line that contains \command outside of $...$. If you need to write text, write plain English. If you need math, wrap it in $.
+
+FORMATTING EXAMPLE (follow this spacing exactly — note the blank line between every line):
+
+## Given
+
+L.H.S. = $\cos^2 \left(45^\circ - \frac{\theta}{2}\right) - \sin^2 \left(45^\circ - \frac{\theta}{2}\right)$
+
+R.H.S. = $\sin \theta$
+
+## Proof
+
+**Step 1:** Apply $\cos 2A = \cos^2 A - \sin^2 A$
+
+Let $A = 45^\circ - \frac{\theta}{2}$
+
+L.H.S. = $\cos \left(2 \times \left(45^\circ - \frac{\theta}{2}\right)\right)$
+
+**Step 2:** Simplify
+
+L.H.S. = $\cos (90^\circ - \theta)$
+
+**Step 3:** Apply $\cos(90^\circ - X) = \sin X$
+
+L.H.S. = $\sin \theta$ = R.H.S. ✓
+
+BAD EXAMPLE (no blank lines — everything crammed):
+
+Step 1: Apply cos2A = cos²A - sin²A. L.H.S. = cos²(45° - θ/2) - sin²(45° - θ/2). Let A = (45° - θ/2). Then, L.H.S. = cos(2A).
+"""
+
+
+def _is_valid_response(text: str) -> bool:
+    """Check if AI response is a valid educational answer (not a Python error or code block)."""
+    if not text or len(text.strip()) < 10:
+        return False
+    lower = text.lower()
+    return not any(marker in lower for marker in _INVALID_RESPONSE_MARKERS)
+
+
 _GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-2.0-flash"]
 _DEEPSEEK_MODEL = "deepseek-v4-flash-free"
 _DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
@@ -137,6 +216,19 @@ class AIService:
         is_exercise = self._looks_like_exercise_request(message)
         has_chapter_match = bool(title_tokens and (title_tokens <= source_tokens or title_tokens & message_tokens))
 
+        # Check if the specific exercise number exists in the source text
+        exercise_match = re.search(r"exercise\s+([\d.]+)", message, re.IGNORECASE)
+        exercise_number = exercise_match.group(1) if exercise_match else None
+        if exercise_number and source_text:
+            exercise_in_source = bool(re.search(r"exercise\s+" + re.escape(exercise_number), source_text, re.IGNORECASE))
+            if not exercise_in_source:
+                return {
+                    "verified": False,
+                    "matched_terms": matched[:8],
+                    "page_refs": page_refs,
+                    "reason": f"Exercise {exercise_number} not found in loaded textbook content",
+                }
+
         return {
             "verified": has_source and (bool(matched) or (is_exercise and bool(chapter_title)) or has_chapter_match),
             "matched_terms": matched[:8],
@@ -149,11 +241,10 @@ class AIService:
         """Get chapter-scoped textbook context."""
         if not subject or not chapter_title:
             return ""
-        max_chars = 20000 if self._looks_like_exercise_request(message) else 7000
-        text = get_chapter_text_for_selection(subject, chapter_title, max_chars=max_chars)
+        text = get_chapter_text_for_selection(subject, chapter_title)
         if text:
             return text
-        return get_chapter_pdf_context(subject, message, max_chars=max_chars)
+        return get_chapter_pdf_context(subject, message)
 
     def _is_context_followup(self, message: str) -> bool:
         text = (message or "").strip().lower()
@@ -435,42 +526,43 @@ Rules:
         raise Exception("All providers exhausted: " + " | ".join(errors))
 
     def generate_title(self, user_message: str) -> str:
-        """Generate title via Gemini/Cerebras LLM, fallback to heuristic if unavailable."""
-        system_prompt = "Generate a very short title (max 6 words) for a chat session based on the student's first message. Respond with ONLY the title, no punctuation, no quotes."
-        prompt = f"Student message: {user_message}\n\nTitle:"
-
-        # Try Gemini first
-        try:
-            result = self._try_gemini(prompt, system_prompt, max_output_tokens=100, timeout=15, plan_tier="free", errors=[])
-            if result:
-                result = result.strip().strip('"\'').strip()
-                if 2 <= len(result.split()) <= 6 and len(result) <= 60:
-                    return result
-        except Exception:
-            pass
-
-        # Try Cerebras if key is configured
-        cerebras_key = os.environ.get("CEREBRAS_API_KEY", "").strip()
-        if cerebras_key:
+        """Generate a short, specific title via Groq (fast/cheap), fallback to heuristic."""
+        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+        if groq_key:
+            system_prompt = (
+                "You generate short chat titles for a student study assistant. "
+                "Rules:\n"
+                "- 3 to 6 words maximum\n"
+                "- Be SPECIFIC to the topic (mention the concept, not just 'question')\n"
+                "- Use title case\n"
+                "- Never start with 'Ask', 'Solve', 'Explain', 'This' — start with the topic name\n"
+                "- Examples of GOOD titles: 'Compound Interest Formula', 'Photosynthesis Process', 'Quadratic Equations', 'Newton's Laws of Motion'\n"
+                "- Examples of BAD titles: 'Solve Exercise', 'This Simply', 'Math Question', 'Study Help'\n"
+                "- Respond with ONLY the title, no quotes, no punctuation"
+            )
+            prompt = f"Student's first message: {user_message[:200]}"
             try:
-                result = self._try_cerebras(prompt, system_prompt, max_tokens=50, timeout=15)
+                result = self._call_groq(groq_key, prompt, system_prompt, max_tokens=20, timeout=8)
                 if result:
-                    result = result.strip().strip('"\'').strip()
-                    if 2 <= len(result.split()) <= 6 and len(result) <= 60:
+                    result = result.strip().strip('"\'').strip(".!")
+                    if 2 <= len(result.split()) <= 6 and len(result) <= 50:
                         return result
             except Exception:
                 pass
 
         # Heuristic fallback
         title = (user_message or "").strip()
-        title = re.sub(r"^(what is|explain|describe|define|how|why|when|where|who|solve|find|calculate|compute)\s+", "", title, flags=re.IGNORECASE)
-        title = title.replace("?", "").replace("!", "")
+        title = re.sub(
+            r"^(what is|what are|explain|describe|define|how (?:do|does|to|can|is)|why (?:do|does|is|are)|when (?:do|does|is|are)|where (?:do|does|is|are)|who (?:is|are|was|were)|solve|find|calculate|compute|help me|can you|i (?:want|need|would like) to|tell me about|give me|write|read|practice)\s+",
+            "", title, flags=re.IGNORECASE,
+        )
+        title = title.replace("?", "").replace("!", "").replace(".", "")
         words = title.split()
-        if len(words) > 8:
-            title = " ".join(words[:8]) + "..."
+        if len(words) > 6:
+            title = " ".join(words[:6])
         if len(title) > 50:
-            title = title[:50].rsplit(" ", 1)[0] + "..."
-        return title or "New Chat"
+            title = title[:50].rsplit(" ", 1)[0]
+        return title.strip() or "New Chat"
 
     def chat(
         self, message: str, user=None, personal_context: str = "", context: Dict = None
@@ -511,13 +603,17 @@ Rules:
                 yield {"type": "status", "stage": "context_loaded", "message": f"Textbook content loaded{page_info}."}
                 verification = self._grounding_verification(message, chapter_context, chapter_title)
                 if not verification["verified"]:
+                    reason = verification.get("reason", "")
+                    response_msg = (
+                        "I found the selected chapter, but I could not verify this question "
+                        "against its textbook text. Please include the exact exercise/question "
+                        "text or check that the selected chapter is correct."
+                    )
+                    if reason:
+                        response_msg = f"I found the selected chapter, but {reason}. Please select the correct chapter or provide the exact question text."
                     yield {
                         "type": "complete",
-                        "response": (
-                            "I found the selected chapter, but I could not verify this question "
-                            "against its textbook text. Please include the exact exercise/question "
-                            "text or check that the selected chapter is correct."
-                        ),
+                        "response": response_msg,
                         "source": f"CDC Textbook - {subject.title()} - {chapter_title}",
                     }
                     return
@@ -538,10 +634,18 @@ CRITICAL RULES:
 1. Answer the question using ONLY the provided textbook content.
 2. For exercise-style requests, solve the requested item using the definitions, examples, formulas, and exercise text in the selected chapter. If the exact item text is missing, state the assumption you are using and ask for the exact question only when a numeric/symbolic answer cannot be determined.
 3. Do NOT use any outside knowledge, internet sources, or your training data.
-4. Provide a FULL, DETAILED explanation with definitions, examples, and step-by-step reasoning from the textbook.
-5. Format with clear markdown headers, bullet points, and numbered steps.
-6. Be thorough — aim for a complete explanation suitable for exam preparation, not a brief summary.
-"""
+4. Do NOT generate Python code, programming snippets, or any executable code. Use plain text explanations with LaTeX math only.
+5. ANTI-HALLUCINATION: Do NOT invent or guess which exercise number or question the student is asking about. If the student says "solve exercise 7.3 question 9", look for that exact question in the provided textbook content. If the exact question text is not found in the content, say "I could not find this specific question in the provided textbook content" and ask the student to provide the exact question text. NEVER make up a question that was not provided by the student.
+6. NEVER modify, reinterpret, or "improve" the student's question. Answer exactly what they asked, not what you think they meant.
+
+FORMATTING RULES:
+- Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
+- **CRITICAL: Put a BLANK LINE (empty line) between EVERY step, equation, and text block.** Without blank lines, markdown renders everything as one congested block.
+- Keep paragraphs SHORT — 1-2 sentences max
+- Use **bold** for key terms, formulas, and important results
+- For math solutions, write like a student writes in their notebook: clean, short steps with minimal words
+
+{_LATEX_MATH_INSTRUCTIONS}"""
                 user_prompt = f"""Student Question: {message}
 
 SELECTED CHAPTER TEXTBOOK CONTENT:
@@ -551,13 +655,11 @@ CONVERSATION MEMORY:
 {personal_context[-1500:] if personal_context else "None"}
 
 INSTRUCTIONS:
-1. Provide a comprehensive, detailed answer based ONLY on the textbook content above.
-2. Include definitions, examples, and explanations from the textbook.
-3. Use bullet points and numbered lists for clarity.
-4. If the question asks for notes, provide structured exam notes.
-5. If the question asks for questions/answers, provide them with detailed answers.
-6. Do not add information not present in the textbook content.
-7. Stay grounded in the selected chapter. Do not refuse merely because the student used an exercise number.
+1. Provide a direct, concise answer first.
+2. For math solutions: write like a student's notebook — short steps, minimal narration, let the math speak.
+3. Use ## headings, **bold** key terms, short paragraphs.
+4. Do not add information not present in the textbook content.
+5. Stay grounded in the selected chapter. Do not refuse merely because the student used an exercise number.
 """
                 try:
                     response = self._generate(
@@ -567,6 +669,15 @@ INSTRUCTIONS:
                         timeout=60,
                         plan_tier=plan_tier,
                     )
+                    if not _is_valid_response(response):
+                        print(f"[AI] Invalid response detected, retrying with different model...")
+                        response = self._generate(
+                            user_prompt,
+                            system_prompt,
+                            max_output_tokens=8192,
+                            timeout=60,
+                            plan_tier="paid" if plan_tier == "free" else "free",
+                        )
                     yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
                     cache_service.learn_from_ai(
                         message=message,
@@ -609,9 +720,27 @@ INSTRUCTIONS:
         system_prompt = f"""You are a Grade 10 CDC study assistant. Answer strictly in English.
 Use the provided TEXTBOOK CONTEXT to answer the student's question accurately.
 Do NOT invent facts outside the provided textbook context.
-Format your answer with clear markdown headers, short paragraphs, and bullet points.
+Do NOT invent or guess which question the student is asking about. If the exact question is not in the context, say so and ask for clarification.
 If the question is completely outside the CDC syllabus, reply exactly: {out_of_scope_response}
-"""
+
+FORMATTING RULES:
+- Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
+- **CRITICAL: Put a BLANK LINE (empty line) between EVERY step, equation, and text block.** Without blank lines, markdown renders everything as one congested block.
+- Keep paragraphs SHORT — 1-2 sentences max
+- Use **bold** for key terms, formulas, and important results
+- For math solutions, write like a student writes in their notebook: clean, short steps with minimal words
+
+SOLUTION STYLE RULES:
+- Write at Grade 10 level. Use simple, everyday English. No fancy vocabulary.
+- Do NOT separate numerator and denominator into different sections. Keep the fraction as one expression and simplify it directly in place.
+- Do NOT explain what a fraction or identity "means". Just apply it and move on.
+- Each step: state the identity, substitute, simplify. That's it.
+- Maximum 1-2 lines per step. If a step needs more than 2 lines, split it into two steps.
+- Use "L.H.S. = ..." format consistently. Don't write long paragraphs describing what you're doing.
+- Never say "Assuming ... ≠ 0" or "This expression is not generally equal to". Just solve it.
+- If the identity is provable from the textbook, it IS correct. Prove it directly.
+
+{_LATEX_MATH_INSTRUCTIONS}"""
         user_prompt = f"""Student Question: {message}
 
 TEXTBOOK CONTEXT:
@@ -634,6 +763,15 @@ INSTRUCTIONS:
                 timeout=30,
                 plan_tier=plan_tier,
             )
+            if not _is_valid_response(response):
+                print(f"[AI] Invalid response detected in fallback, retrying...")
+                response = self._generate(
+                    user_prompt,
+                    system_prompt,
+                    max_output_tokens=2048,
+                    timeout=30,
+                    plan_tier="paid" if plan_tier == "free" else "free",
+                )
             yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
             cache_service.learn_from_ai(
                 message=message,

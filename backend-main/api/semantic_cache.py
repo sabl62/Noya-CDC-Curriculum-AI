@@ -204,6 +204,10 @@ class SemanticCacheService:
     def __init__(self):
         self._memory = _LRUCache(maxsize=512)
 
+    def clear(self):
+        """Clear all in-memory cache entries."""
+        self._memory.clear()
+
     # ─── Public API ─────────────────────────────────────────
 
     def inspect(self, message: str, context: Dict = None, user=None, plan_tier: str = "free") -> CacheDecision:
@@ -324,6 +328,13 @@ class SemanticCacheService:
             "all ai providers failed",
             "service unavailable",
             "quota",
+            "name '",
+            "is not defined",
+            "traceback",
+            "syntaxerror",
+            "typeerror",
+            "indexerror",
+            "keyerror",
         ]):
             return None
 

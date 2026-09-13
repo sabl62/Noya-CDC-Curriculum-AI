@@ -17,6 +17,7 @@ from .views import (
     ChatHistoryView,
     ChatSessionView,
     ChatSessionDetailView,
+    CacheClearView,
     TextbookPDFView,
     TextbookPagesView,
     health_check,
@@ -55,6 +56,7 @@ urlpatterns = [
     path('chat/', ChatView.as_view(), name='chat'),
     path('chat/history/', ChatHistoryView.as_view(), name='chat_history'),
     path('chat/clear/', ChatHistoryView.as_view(), name='chat_clear'),
+    path('cache/clear/', CacheClearView.as_view(), name='cache_clear'),
     path('chat/sessions/', ChatSessionView.as_view(), name='chat_sessions'),
     path('chat/sessions/<int:session_id>/', ChatSessionDetailView.as_view(), name='chat_session_detail'),
 

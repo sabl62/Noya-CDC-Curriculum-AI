@@ -299,7 +299,7 @@ def get_page_range_for_selection(
 
 
 def get_chapter_text_for_selection(
-    subject: str, title: str = "", max_chars: int = 4500
+    subject: str, title: str = ""
 ) -> str:
     """Extract textbook text for a chapter identified by its title string.
 
@@ -319,7 +319,7 @@ def get_chapter_text_for_selection(
         return ""
 
     start_page, end_page = page_range
-    text = _extract_pages(pdf_path, start_page, end_page, max_chars=max_chars)
+    text = _extract_pages(pdf_path, start_page, end_page)
     if not text.strip():
         return ""
 
@@ -376,7 +376,7 @@ def get_textbook_pages(subject: str, start_page: int, end_page: int) -> list:
     return pages
 
 
-def get_chapter_pdf_context(subject: str, message: str, max_chars: int = 4500) -> str:
+def get_chapter_pdf_context(subject: str, message: str) -> str:
     if not PYPDF_AVAILABLE:
         return ""
 
@@ -391,7 +391,7 @@ def get_chapter_pdf_context(subject: str, message: str, max_chars: int = 4500) -
         return ""
 
     start_page, end_page = page_range
-    text = _extract_pages(pdf_path, start_page, end_page, max_chars=max_chars)
+    text = _extract_pages(pdf_path, start_page, end_page)
     if not text.strip():
         return ""
 
@@ -580,12 +580,10 @@ def _to_int(value: str) -> Optional[int]:
     return int(digits) if digits else None
 
 
-def _extract_pages(pdf_path: Path, start_page: int, end_page: int, max_chars: int) -> str:
+def _extract_pages(pdf_path: Path, start_page: int, end_page: int) -> str:
     subject = pdf_path.stem.lower()
     reader = PdfReader(str(pdf_path))
     parts = []
-    running_len = 0
-    sep_len = 2  # "\n\n"
     for page_no in range(start_page, min(end_page, len(reader.pages)) + 1):
         cached_text = _get_cached_ocr_page_text(subject, page_no)
         if cached_text:
@@ -600,12 +598,7 @@ def _extract_pages(pdf_path: Path, start_page: int, end_page: int, max_chars: in
         if not text:
             continue
 
-        part = f"[Page {pdf_page_to_printed(subject, page_no)}]\n{text}"
-        part_len = len(part) + (sep_len if parts else 0)
-        if running_len + part_len > max_chars:
-            break
-        parts.append(part)
-        running_len += part_len
+        parts.append(f"[Page {pdf_page_to_printed(subject, page_no)}]\n{text}")
     return "\n\n".join(parts)
 
 
