@@ -235,6 +235,38 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       setMessages(loadedMessages);
       setSessionId(session.id);
       setMobileSidebarOpen(false);
+
+      // Restore the session's own subject/chapter into router state.
+      // The session record (kept in sync by the backend) is authoritative.
+      // Message contexts are only a fallback, and only when their subject
+      // matches — so a message saved during the stale-state bug can never
+      // restore a chapter from another subject's book.
+      const restoredSubject = session.subject || null;
+      let restoredChapter = session.chapter || null;
+      if (!restoredChapter && restoredSubject && session.messages?.length) {
+        for (let i = session.messages.length - 1; i >= 0; i--) {
+          const messageContext = session.messages[i].context || {};
+          if (
+            messageContext.subject === restoredSubject &&
+            messageContext.chapter
+          ) {
+            restoredChapter = messageContext.chapter;
+            break;
+          }
+        }
+      }
+      // A chapter that isn't part of this subject's curriculum is junk — drop it.
+      const subjectChapters = findSubject(restoredSubject || "")?.chapters || [];
+      if (restoredChapter && !subjectChapters.includes(restoredChapter)) {
+        restoredChapter = null;
+      }
+      if (restoredSubject !== subjectContext || restoredChapter !== chapterContext) {
+        navigate("/chat", {
+          state: restoredSubject ? { subject: restoredSubject, chapter: restoredChapter } : {},
+          replace: true,
+        });
+      }
+
       refreshSessions({ silent: true });
     } catch {
       resetChat();
@@ -736,6 +768,7 @@ const Sidebar = ({
                   onChange={(event) => onChangeChapter(event.target.value)}
                   className={highlightPicker ? "highlight" : ""}
                 >
+                  {!chapterContext && <option value="">Select a chapter</option>}
                   {availableChapters.map((chapter) => (
                     <option key={chapter} value={chapter}>
                       {chapter}

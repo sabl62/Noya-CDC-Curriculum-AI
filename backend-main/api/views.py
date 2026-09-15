@@ -34,6 +34,7 @@ from .chapter_pdf_context import (
 from .semantic_cache import (
     embed_text,
     educational_fingerprint,
+    extract_exercise_ref,
     extract_topic,
     get_semantic_cache_service,
     infer_intent,
@@ -108,6 +109,46 @@ def build_conversation_context(session, limit=8):
             f"Assistant: {_clip_context_text(chat.response, 900)}"
         )
     return "\n\n".join(lines)
+
+
+def _reconcile_session_context(session, context):
+    """Return a (possibly corrected) context dict for an existing chat session.
+
+    The session record is authoritative: if the client sends a stale subject
+    (e.g. leftover router state after switching chats), the AI would be fed
+    the wrong textbook — the session's subject wins, and the incoming chapter
+    (which belongs to the other subject's book) is replaced with the session's
+    own chapter. Also keeps session.subject/chapter in sync so reloading the
+    session restores the right context.
+    """
+    context = dict(context or {})
+    session_subject = (session.subject or '').strip()
+    session_chapter = (session.chapter or '').strip()
+    incoming_subject = str(context.get('subject') or '').strip()
+    incoming_chapter = str(context.get('chapter') or '').strip()
+
+    if session_subject and incoming_subject and incoming_subject != session_subject:
+        print(
+            f"[Chat] Subject mismatch for session {session.id}: "
+            f"client sent '{incoming_subject}', session is '{session_subject}' — using session subject."
+        )
+        context['subject'] = session_subject
+        # The incoming chapter belongs to the other subject's book — drop it.
+        context['chapter'] = session_chapter
+
+    # Persist the latest valid subject/chapter on the session record.
+    final_subject = str(context.get('subject') or '').strip()
+    final_chapter = str(context.get('chapter') or '').strip()
+    updates = []
+    if final_subject and final_subject != session_subject:
+        session.subject = final_subject[:50]
+        updates.append('subject')
+    if final_chapter and final_chapter != session_chapter:
+        session.chapter = final_chapter[:255]
+        updates.append('chapter')
+    if updates:
+        session.save(update_fields=updates)
+    return context
 
 
 def _frontend_base_url(request=None):
@@ -429,9 +470,14 @@ class ChatView(APIView):
                 user=user,
                 title=clamp_session_title(context.get('subject', 'New Chat') if context else 'New Chat'),
                 subject=context.get('subject', '') if context else '',
+                chapter=str((context or {}).get('chapter') or '')[:255],
                 grade=context.get('grade', '10') if context else '10',
                 language='english'
             )
+        elif session:
+            # Session record is authoritative — corrects stale client state
+            # and keeps the session's subject/chapter up to date.
+            context = _reconcile_session_context(session, context)
 
         def event_stream():
             try:
@@ -560,6 +606,7 @@ class KnowledgeBaseEntryView(APIView):
         intent = data.get('intent') or infer_intent(seed_query, data.get('question_type', ''))
         topic = data.get('topic') or extract_topic(seed_query, context)
         scope = scope_filters(context)
+        exercise_ref = data.get('exercise_ref') or extract_exercise_ref(seed_query)
         data['subject'] = scope['subject']
         data['grade'] = scope['grade']
         data['unit'] = scope['unit']
@@ -569,7 +616,8 @@ class KnowledgeBaseEntryView(APIView):
         data['intent'] = intent
         data['question_type'] = data.get('question_type') or intent
         data['normalized_query'] = normalized
-        data['query_fingerprint'] = educational_fingerprint(scope, intent, topic, normalized)
+        data['exercise_ref'] = exercise_ref
+        data['query_fingerprint'] = educational_fingerprint(scope, intent, topic, normalized, exercise_ref)
         data['embedding'] = embed_text(f"{scope.get('chapter_title', '')} {topic} {intent} {normalized} {data.get('answer', '')[:800]}")
         data.setdefault('quality_score', 0.9)
         data.setdefault('textbook_alignment_score', 0.9)

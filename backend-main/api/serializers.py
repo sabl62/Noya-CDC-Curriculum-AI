@@ -48,10 +48,10 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 class ChatSessionSerializer(serializers.ModelSerializer):
     messages = ChatMessageSerializer(many=True, read_only=True)
     last_message = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = ChatSession
-        fields = ['id', 'title', 'subject', 'grade', 'language', 'messages', 'last_message', 'created_at', 'updated_at']
+        fields = ['id', 'title', 'subject', 'chapter', 'grade', 'language', 'messages', 'last_message', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_last_message(self, obj):
@@ -100,7 +100,7 @@ class KnowledgeBaseEntrySerializer(serializers.ModelSerializer):
         fields = [
             'id', 'subject', 'grade', 'unit', 'chapter', 'chapter_title', 'topic',
             'learning_objective', 'question_type', 'difficulty', 'intent',
-            'normalized_query', 'answer', 'source_type', 'source_reference',
+            'normalized_query', 'exercise_ref', 'answer', 'source_type', 'source_reference',
             'quality_score', 'student_feedback_score', 'textbook_alignment_score',
             'hallucination_risk_score', 'usage_count', 'hit_count',
             'last_verified_at', 'metadata', 'is_active', 'created_at', 'updated_at',
@@ -113,7 +113,7 @@ class SemanticAnswerCacheSerializer(serializers.ModelSerializer):
         model = SemanticAnswerCache
         fields = [
             'id', 'subject', 'grade', 'unit', 'chapter', 'chapter_title', 'topic',
-            'question_type', 'difficulty', 'intent', 'normalized_query', 'answer',
+            'question_type', 'difficulty', 'intent', 'normalized_query', 'exercise_ref', 'answer',
             'source_type', 'source_reference', 'quality_score', 'student_feedback_score',
             'textbook_alignment_score', 'hallucination_risk_score', 'usage_count',
             'hit_count', 'last_verified_at', 'metadata', 'created_from_model',

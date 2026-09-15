@@ -54,6 +54,10 @@ class ChatSession(models.Model):
     )
     title = models.CharField(max_length=200, blank=True, default='')
     subject = models.CharField(max_length=50, blank=True, default='')
+    chapter = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Latest chapter selected in this session. Authoritative for context restore.",
+    )
     grade = models.CharField(max_length=10, blank=True, default='10')
     language = models.CharField(max_length=20, blank=True, default='english')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -128,6 +132,10 @@ class EducationalContentBase(models.Model):
     difficulty = models.CharField(max_length=30, blank=True, default='easy', db_index=True)
     intent = models.CharField(max_length=80, blank=True, default='', db_index=True)
     normalized_query = models.TextField(blank=True, default='')
+    exercise_ref = models.CharField(
+        max_length=20, blank=True, default='', db_index=True,
+        help_text="Explicit exercise/question reference (e.g. '7.3' or '7.3#2'). Hard cache-scope key.",
+    )
     query_fingerprint = models.CharField(max_length=64, blank=True, default='', db_index=True)
     embedding = models.JSONField(default=list, blank=True)
     answer = models.TextField()

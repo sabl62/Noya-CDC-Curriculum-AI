@@ -42,6 +42,59 @@ STOPWORDS = {
 }
 
 
+# ─── Exercise reference extraction (anti cross-exercise contamination) ────
+
+_DEVANAGARI_DIGITS = "०१२३४५६७८९"
+
+_EXERCISE_WORD = r"\b(?:exercise|exer\.?|ex\.?|अभ्यास)"
+_QUESTION_WORD = r"(?:question|ques\.?|q\.?|number|no\.?|num\.?|प्रश्न)"
+
+
+def _to_arabic_digits(text: str) -> str:
+    return str(text or "").translate(str.maketrans(_DEVANAGARI_DIGITS, "0123456789"))
+
+
+def extract_exercise_refs(text: str) -> List[str]:
+    """Extract all explicit exercise references from a message.
+
+    Each ref is a composite "exercise[#question]" string, e.g.:
+        "solve exercise 7.3 question 2"  -> ["7.3#2"]
+        "explain ex 7.1"                 -> ["7.1"]
+        "7.2 no. 4"                      -> ["7.2#4"]
+    Returns [] when the message names no explicit exercise.
+    """
+    if not text:
+        return []
+    normalized = _to_arabic_digits(text)
+    refs: List[str] = []
+    seen = set()
+    for match in re.finditer(
+        rf"{_EXERCISE_WORD}\s*([0-9]+(?:\.[0-9]+)?)(?:\s*{_QUESTION_WORD}\s*([0-9]+))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        ref = match.group(1) + (f"#{match.group(2)}" if match.group(2) else "")
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    for match in re.finditer(
+        rf"\b([0-9]+(?:\.[0-9]+)?)\s*{_QUESTION_WORD}\s*([0-9]+)\b",
+        normalized,
+        re.IGNORECASE,
+    ):
+        ref = f"{match.group(1)}#{match.group(2)}"
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
+def extract_exercise_ref(text: str) -> str:
+    """First explicit exercise reference in the message, or '' if none."""
+    refs = extract_exercise_refs(text)
+    return refs[0] if refs else ""
+
+
 @dataclass
 class CacheDecision:
     decision: str
@@ -62,27 +115,29 @@ class _LRUCache:
         self._cache: OrderedDict = OrderedDict()
         self._maxsize = maxsize
 
-    def _key(self, scope: Dict, intent: str, normalized: str) -> str:
+    def _key(self, scope: Dict, intent: str, normalized: str, exercise_ref: str = "") -> str:
         """Deterministic cache key."""
         subject = normalize_subject(scope.get("subject", ""))
         chapter = str(scope.get("chapter", ""))
         unit = str(scope.get("unit", ""))
         grade = str(scope.get("grade", "10"))
-        # Intent + first 8 content tokens create a robust key
+        # Intent + exercise ref + first 8 content tokens create a robust key.
+        # The exercise ref is critical: without it "exercise 7.1" and
+        # "exercise 7.3" normalize to near-identical token streams.
         tokens = " ".join(tokenize(normalized)[:8])
-        raw = f"{grade}|{subject}|{unit}|{chapter}|{intent}|{tokens}"
+        raw = f"{grade}|{subject}|{unit}|{chapter}|{intent}|{exercise_ref}|{tokens}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
-    def get(self, scope: Dict, intent: str, normalized: str) -> Optional[Tuple[str, float]]:
-        key = self._key(scope, intent, normalized)
+    def get(self, scope: Dict, intent: str, normalized: str, exercise_ref: str = "") -> Optional[Tuple[str, float]]:
+        key = self._key(scope, intent, normalized, exercise_ref)
         if key in self._cache:
             answer, quality = self._cache.pop(key)
             self._cache[key] = (answer, quality)  # move to end (MRU)
             return answer, quality
         return None
 
-    def put(self, scope: Dict, intent: str, normalized: str, answer: str, quality: float = 0.95):
-        key = self._key(scope, intent, normalized)
+    def put(self, scope: Dict, intent: str, normalized: str, answer: str, quality: float = 0.95, exercise_ref: str = ""):
+        key = self._key(scope, intent, normalized, exercise_ref)
         if key in self._cache:
             self._cache.pop(key)
         elif len(self._cache) >= self._maxsize:
@@ -175,7 +230,7 @@ def scope_filters(context: Dict = None) -> Dict:
     }
 
 
-def educational_fingerprint(scope: Dict, intent: str, topic: str, normalized: str) -> str:
+def educational_fingerprint(scope: Dict, intent: str, topic: str, normalized: str, exercise_ref: str = "") -> str:
     parts = [
         scope.get("grade", "10"),
         normalize_subject(scope.get("subject", "")),
@@ -183,6 +238,7 @@ def educational_fingerprint(scope: Dict, intent: str, topic: str, normalized: st
         str(scope.get("chapter", "")),
         topic,
         intent,
+        exercise_ref,
         " ".join(tokenize(normalized)[:10]),
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
@@ -217,11 +273,12 @@ class SemanticCacheService:
         normalized = normalize_query(message)
         intent = infer_intent(message, context.get("study_mode", ""))
         topic = extract_topic(message, context)
+        exercise_ref = extract_exercise_ref(message)
         embedding = embed_text(f"{scope.get('chapter_title', '')} {topic} {intent} {normalized}")
-        fingerprint = educational_fingerprint(scope, intent, topic, normalized)
+        fingerprint = educational_fingerprint(scope, intent, topic, normalized, exercise_ref)
 
         # Tier 1: In-memory LRU (fastest)
-        mem_hit = self._memory.get(scope, intent, normalized)
+        mem_hit = self._memory.get(scope, intent, normalized, exercise_ref)
         if mem_hit:
             answer, quality = mem_hit
             decision = CacheDecision(
@@ -229,7 +286,7 @@ class SemanticCacheService:
                 answer=answer,
                 source="Hot Memory Cache",
                 confidence=round(quality, 4),
-                metadata={"intent": intent, "topic": topic, "match": "memory_lru", "tier": 1},
+                metadata={"intent": intent, "topic": topic, "exercise_ref": exercise_ref, "match": "memory_lru", "tier": 1},
             )
             self._record(message, normalized, scope, plan_tier, decision, started, user)
             return decision
@@ -237,52 +294,56 @@ class SemanticCacheService:
         # Tier 2: Exact fingerprint DB match (very fast, very accurate)
         exact = self._exact_match(scope, intent, fingerprint)
         if exact and self._quality_ok(exact):
-            # Warm the memory cache for next time
-            self._memory.put(scope, intent, normalized, exact.answer, float(exact.quality_score or 0.9))
-            decision = CacheDecision(
-                decision=DECISION_CACHE_HIT,
-                answer=exact.answer,
-                source="Semantic Cache (Exact)",
-                confidence=0.99,
-                matched_cache=exact,
-                metadata={"intent": intent, "topic": topic, "match": "fingerprint", "tier": 2},
-            )
-            self._record(message, normalized, scope, plan_tier, decision, started, user)
-            self._mark_cache_hit(exact)
-            return decision
+            # Defensive guard: never serve a cached answer across exercise refs
+            if getattr(exact, "exercise_ref", "") == exercise_ref:
+                # Warm the memory cache for next time
+                self._memory.put(scope, intent, normalized, exact.answer, float(exact.quality_score or 0.9), exercise_ref)
+                decision = CacheDecision(
+                    decision=DECISION_CACHE_HIT,
+                    answer=exact.answer,
+                    source="Semantic Cache (Exact)",
+                    confidence=0.99,
+                    matched_cache=exact,
+                    metadata={"intent": intent, "topic": topic, "exercise_ref": exercise_ref, "match": "fingerprint", "tier": 2},
+                )
+                self._record(message, normalized, scope, plan_tier, decision, started, user)
+                self._mark_cache_hit(exact)
+                return decision
 
         # Tier 3: Knowledge Base lookup (precomputed textbook answers)
-        kb_match, kb_score = self._kb_match(scope, intent, topic, embedding)
+        kb_match, kb_score = self._kb_match(scope, intent, topic, embedding, exercise_ref)
         if kb_match and kb_score >= self.kb_threshold and self._quality_ok(kb_match):
-            self._memory.put(scope, intent, normalized, kb_match.answer, float(kb_match.quality_score or 0.9))
+            self._memory.put(scope, intent, normalized, kb_match.answer, float(kb_match.quality_score or 0.9), exercise_ref)
             decision = CacheDecision(
                 decision=DECISION_KB_HIT,
                 answer=kb_match.answer,
                 source="Precomputed Knowledge Base",
                 confidence=round(kb_score, 4),
                 matched_kb=kb_match,
-                metadata={"intent": intent, "topic": topic, "tier": 3},
+                metadata={"intent": intent, "topic": topic, "exercise_ref": exercise_ref, "tier": 3},
             )
             self._record(message, normalized, scope, plan_tier, decision, started, user)
             self._mark_kb_hit(kb_match)
             return decision
 
         # Tier 4: Semantic cache fuzzy match (same chapter/intent candidates)
-        cache_match, cache_score = self._semantic_match(scope, intent, topic, embedding, plan_tier)
+        cache_match, cache_score = self._semantic_match(scope, intent, topic, embedding, plan_tier, exercise_ref)
         threshold = self.cache_threshold if plan_tier == "paid" else self.free_ai_threshold
         if cache_match and cache_score >= threshold and self._quality_ok(cache_match):
-            self._memory.put(scope, intent, normalized, cache_match.answer, float(cache_match.quality_score or 0.85))
-            decision = CacheDecision(
-                decision=DECISION_CACHE_HIT,
-                answer=cache_match.answer,
-                source="Semantic Cache (Fuzzy)",
-                confidence=round(cache_score, 4),
-                matched_cache=cache_match,
-                metadata={"intent": intent, "topic": topic, "tier": 4},
-            )
-            self._record(message, normalized, scope, plan_tier, decision, started, user)
-            self._mark_cache_hit(cache_match)
-            return decision
+            # Defensive guard: fuzzy tier must never cross exercise refs
+            if getattr(cache_match, "exercise_ref", "") == exercise_ref:
+                self._memory.put(scope, intent, normalized, cache_match.answer, float(cache_match.quality_score or 0.85), exercise_ref)
+                decision = CacheDecision(
+                    decision=DECISION_CACHE_HIT,
+                    answer=cache_match.answer,
+                    source="Semantic Cache (Fuzzy)",
+                    confidence=round(cache_score, 4),
+                    matched_cache=cache_match,
+                    metadata={"intent": intent, "topic": topic, "exercise_ref": exercise_ref, "tier": 4},
+                )
+                self._record(message, normalized, scope, plan_tier, decision, started, user)
+                self._mark_cache_hit(cache_match)
+                return decision
 
         # Miss — AI required
         decision = CacheDecision(
@@ -291,6 +352,7 @@ class SemanticCacheService:
             metadata={
                 "intent": intent,
                 "topic": topic,
+                "exercise_ref": exercise_ref,
                 "fingerprint": fingerprint,
                 "embedding": embedding,
                 "best_kb_score": round(kb_score, 4),
@@ -343,15 +405,16 @@ class SemanticCacheService:
         normalized = normalize_query(message)
         intent = infer_intent(message, context.get("study_mode", ""))
         topic = extract_topic(message, context)
+        exercise_ref = extract_exercise_ref(message)
         embedding = embed_text(f"{scope.get('chapter_title', '')} {topic} {intent} {normalized} {answer[:800]}")
         quality = self.evaluate_quality(answer, context)
         if quality["quality_score"] < min_quality:
             return None
 
-        fingerprint = educational_fingerprint(scope, intent, topic, normalized)
+        fingerprint = educational_fingerprint(scope, intent, topic, normalized, exercise_ref)
 
         # Warm memory cache immediately
-        self._memory.put(scope, intent, normalized, answer, quality["quality_score"])
+        self._memory.put(scope, intent, normalized, answer, quality["quality_score"], exercise_ref)
 
         cache, _ = SemanticAnswerCache.objects.update_or_create(
             query_fingerprint=fingerprint,
@@ -364,6 +427,7 @@ class SemanticCacheService:
                 "chapter_title": scope.get("chapter_title", ""),
                 "topic": topic,
                 "intent": intent,
+                "exercise_ref": exercise_ref,
                 "difficulty": str(context.get("difficulty", "easy") or "easy"),
                 "normalized_query": normalized,
                 "embedding": embedding,
@@ -408,8 +472,12 @@ class SemanticCacheService:
             question_type=intent,
         ).order_by("-quality_score", "-student_feedback_score", "-usage_count").first()
 
-    def _kb_match(self, scope: Dict, intent: str, topic: str, embedding: List[float]) -> Tuple[Optional[KnowledgeBaseEntry], float]:
-        """Knowledge base lookup — same chapter first, then subject-wide."""
+    def _kb_match(self, scope: Dict, intent: str, topic: str, embedding: List[float], exercise_ref: str = "") -> Tuple[Optional[KnowledgeBaseEntry], float]:
+        """Knowledge base lookup — same chapter first, then subject-wide.
+
+        exercise_ref is a hard filter: a query naming "exercise 7.3" can only
+        match entries stored for exactly that exercise (and vice versa).
+        """
         # Try exact chapter match first (most accurate)
         candidates = KnowledgeBaseEntry.objects.filter(
             is_active=True,
@@ -417,6 +485,7 @@ class SemanticCacheService:
             subject=scope["subject"],
             chapter=scope["chapter"],
             question_type__in=["general", intent],
+            exercise_ref=exercise_ref,
         ).order_by("-quality_score", "-usage_count")[:20]
 
         best, best_score = self._score_candidates(candidates, embedding, topic)
@@ -430,13 +499,18 @@ class SemanticCacheService:
                 grade=scope["grade"],
                 subject=scope["subject"],
                 question_type__in=["general", intent],
+                exercise_ref=exercise_ref,
             ).order_by("-quality_score", "-usage_count")[:30]
             best, best_score = self._score_candidates(candidates, embedding, topic)
 
         return best, best_score
 
-    def _semantic_match(self, scope: Dict, intent: str, topic: str, embedding: List[float], plan_tier: str) -> Tuple[Optional[SemanticAnswerCache], float]:
-        """Fuzzy semantic match — scoped to same chapter first."""
+    def _semantic_match(self, scope: Dict, intent: str, topic: str, embedding: List[float], plan_tier: str, exercise_ref: str = "") -> Tuple[Optional[SemanticAnswerCache], float]:
+        """Fuzzy semantic match — scoped to same chapter first.
+
+        exercise_ref is a hard filter: entries cached for a different exercise
+        (or with no exercise ref) are excluded entirely, never down-weighted.
+        """
         # Same chapter + intent (tightest scope)
         candidates = SemanticAnswerCache.objects.filter(
             is_active=True,
@@ -444,6 +518,7 @@ class SemanticCacheService:
             subject=scope["subject"],
             chapter=scope["chapter"],
             question_type__in=["general", intent],
+            exercise_ref=exercise_ref,
         ).order_by("-quality_score", "-usage_count")[:20]
 
         best, best_score = self._score_candidates(candidates, embedding, topic)
@@ -457,6 +532,7 @@ class SemanticCacheService:
                 grade=scope["grade"],
                 subject=scope["subject"],
                 question_type__in=["general", intent],
+                exercise_ref=exercise_ref,
             ).order_by("-quality_score", "-usage_count")[:30]
             best, best_score = self._score_candidates(candidates, embedding, topic)
 

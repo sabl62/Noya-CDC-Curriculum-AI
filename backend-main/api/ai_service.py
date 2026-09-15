@@ -41,6 +41,8 @@ from .semantic_cache import (
     DECISION_AI_REQUIRED,
     DECISION_CACHE_HIT,
     DECISION_KB_HIT,
+    extract_exercise_ref,
+    extract_exercise_refs,
     get_semantic_cache_service,
 )
 from .models import ChatMessage, KnowledgeBaseEntry
@@ -261,6 +263,34 @@ class AIService:
         if any(phrase in text for phrase in followup_phrases):
             return True
         return bool(re.search(r"\b(point|no\.?|number|q\.?)\s*[0-9]+\b", text))
+
+    def _exercise_anchor_note(self, message: str, personal_context: str) -> str:
+        """Deterministic anchor note when the student names a specific exercise/question.
+
+        Prevents the LLM from carrying over the previous exercise's context when
+        the student switches from e.g. 7.3 to 7.1 mid-session.
+        """
+        ref = extract_exercise_ref(message)
+        if not ref:
+            return ""
+        exercise_part, _, question_part = ref.partition("#")
+        prior_exercises = sorted({
+            prior.split("#")[0]
+            for prior in extract_exercise_refs(personal_context or "")
+            if prior and prior.split("#")[0] != exercise_part
+        })
+        note = (
+            f"EXERCISE ANCHOR: The student is asking about Exercise {exercise_part}"
+            + (f", question number {question_part}" if question_part else "")
+            + ". Solve ONLY this exercise/question, taken from the textbook content provided.\n"
+        )
+        if prior_exercises:
+            note += (
+                f"IMPORTANT: The conversation history mentions other exercises "
+                f"({', '.join(prior_exercises)}). The student has SWITCHED exercises — "
+                "ignore all previous exercise questions and answers completely.\n"
+            )
+        return note
 
     def _call_gemini(
         self, client, model: str, prompt: str, system_prompt: str,
@@ -648,7 +678,7 @@ FORMATTING RULES:
 {_LATEX_MATH_INSTRUCTIONS}"""
                 user_prompt = f"""Student Question: {message}
 
-SELECTED CHAPTER TEXTBOOK CONTENT:
+{self._exercise_anchor_note(message, personal_context)}SELECTED CHAPTER TEXTBOOK CONTENT:
 {chapter_context}
 
 CONVERSATION MEMORY:
@@ -743,7 +773,7 @@ SOLUTION STYLE RULES:
 {_LATEX_MATH_INSTRUCTIONS}"""
         user_prompt = f"""Student Question: {message}
 
-TEXTBOOK CONTEXT:
+{self._exercise_anchor_note(message, personal_context)}TEXTBOOK CONTEXT:
 {rag_context}
 
 CONVERSATION MEMORY:
