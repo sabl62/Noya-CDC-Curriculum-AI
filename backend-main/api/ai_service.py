@@ -207,8 +207,27 @@ class AIService:
             or re.search(r"\b[0-9]+(?:\.[0-9]+)?\s*(?:number|no\.?|question|q\.?)\s*[0-9]", text)
         )
 
+    def _is_generative_request(self, message: str) -> bool:
+        """Detect requests asking for sample/creative content generation (brochure, example, meaning, etc.)."""
+        text = (message or "").lower()
+        return bool(
+            re.search(r"\b(sample|example|brochure|prepare|create|write|draft|compose|meaning|define|definition|word\s*meaning|meanings?|list\s+the|what\s+are\s+the)\b", text)
+            and re.search(r"\b(sample|example|brochure|prepare|create|write|draft|compose|meaning|define|definition|meanings?)\b", text)
+        )
+
     def _grounding_verification(self, message: str, source_text: str, chapter_title: str = "") -> Dict[str, Any]:
         """Deterministic, no-AI check that the request is grounded in retrieved text."""
+        # Allow generative/creative requests (samples, examples, word meanings, etc.)
+        # These are based on textbook guidelines but require the AI to create content
+        if self._is_generative_request(message):
+            has_source = bool((source_text or "").strip())
+            return {
+                "verified": has_source or bool(chapter_title),
+                "matched_terms": [],
+                "page_refs": sorted(set(re.findall(r"\[Page\s+(\d+)\]", source_text or "")), key=lambda p: int(p))[:5],
+                "generative": True,
+            }
+
         message_tokens = self._content_tokens(message) - _STUDY_TERMS
         source_tokens = self._content_tokens(source_text)
         title_tokens = self._content_tokens(chapter_title)
@@ -661,12 +680,13 @@ Rules:
 You have been provided with retrieved CDC textbook content for the selected chapter.
 
 CRITICAL RULES:
-1. Answer the question using ONLY the provided textbook content.
+1. Answer the question using the provided textbook content as the primary source.
 2. For exercise-style requests, solve the requested item using the definitions, examples, formulas, and exercise text in the selected chapter. If the exact item text is missing, state the assumption you are using and ask for the exact question only when a numeric/symbolic answer cannot be determined.
-3. Do NOT use any outside knowledge, internet sources, or your training data.
+3. Do NOT use any outside knowledge, internet sources, or your training data for factual questions.
 4. Do NOT generate Python code, programming snippets, or any executable code. Use plain text explanations with LaTeX math only.
 5. ANTI-HALLUCINATION: Do NOT invent or guess which exercise number or question the student is asking about. If the student says "solve exercise 7.3 question 9", look for that exact question in the provided textbook content. If the exact question text is not found in the content, say "I could not find this specific question in the provided textbook content" and ask the student to provide the exact question text. NEVER make up a question that was not provided by the student.
 6. NEVER modify, reinterpret, or "improve" the student's question. Answer exactly what they asked, not what you think they meant.
+7. SAMPLE/EXAMPLE GENERATION: When the student explicitly asks you to prepare, create, write, or generate a sample (e.g., "prepare a sample brochure", "give an example of", "write a sample"), you SHOULD create a well-structured example based on the guidelines, structure, or format described in the textbook content. Use the textbook's instructions as a template and fill it with realistic, appropriate content. This is NOT hallucination — it is applying what the textbook teaches. Always note that the sample is an illustrative example based on the chapter's guidelines.
 
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
@@ -688,8 +708,9 @@ INSTRUCTIONS:
 1. Provide a direct, concise answer first.
 2. For math solutions: write like a student's notebook — short steps, minimal narration, let the math speak.
 3. Use ## headings, **bold** key terms, short paragraphs.
-4. Do not add information not present in the textbook content.
+4. Do not add information not present in the textbook content for factual questions.
 5. Stay grounded in the selected chapter. Do not refuse merely because the student used an exercise number.
+6. If the student asks for a sample, example, or creative output (brochure, letter, speech, word meanings, etc.), generate a well-structured example based on the textbook's guidelines. This is an application of the textbook's teaching, not hallucination.
 """
                 try:
                     response = self._generate(
@@ -747,11 +768,13 @@ INSTRUCTIONS:
             return
 
         yield {"type": "status", "stage": "generating", "message": "Generating answer..."}
+        is_generative = verification.get("generative", False)
         system_prompt = f"""You are a Grade 10 CDC study assistant. Answer strictly in English.
 Use the provided TEXTBOOK CONTEXT to answer the student's question accurately.
-Do NOT invent facts outside the provided textbook context.
+Do NOT invent facts outside the provided textbook context for factual questions.
 Do NOT invent or guess which question the student is asking about. If the exact question is not in the context, say so and ask for clarification.
 If the question is completely outside the CDC syllabus, reply exactly: {out_of_scope_response}
+{"SAMPLE/EXAMPLE GENERATION: The student is asking for a sample or creative output. Use the textbook's guidelines, structure, or format as a template and create a well-structured example with realistic content. Always note that the sample is illustrative and based on the chapter's guidelines." if is_generative else ""}
 
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
@@ -784,6 +807,7 @@ INSTRUCTIONS:
 2. Follow with clear, step-by-step explanations or bullet points.
 3. Keep it within 500 words and highly token-efficient.
 4. Do not use filler words. Be precise and exam-focused.
+5. If the student asks for a sample, example, or creative output (brochure, letter, speech, word meanings, etc.), generate a well-structured example based on the textbook's guidelines. This is an application of the textbook's teaching, not hallucination.
 """
         try:
             response = self._generate(
