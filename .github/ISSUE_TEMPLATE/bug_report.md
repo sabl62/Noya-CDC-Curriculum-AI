@@ -1,12 +1,12 @@
 
-**Describe the bug**
+**Describe the bug** <br>
 A clear and concise description of what the bug is.
 
 
-**Expected behavior**
+**Expected behavior** <br>
 A clear and concise description of what you expected to happen.
 
-**Screenshots**
+**Screenshots** <br>
 If applicable, add screenshots to help explain your problem.
 
 **Desktop (please complete the following information):**
@@ -20,5 +20,5 @@ If applicable, add screenshots to help explain your problem.
  - Browser [e.g. stock browser, safari]
  - Version [e.g. 22]
 
-**Additional context**
+**Additional context** <br>
 Add any other context about the problem here.
