@@ -1,11 +1,3 @@
----
-name: Wrong Answer Report
-about: Describe this issue template's purpose here.
-title: ''
-labels: ''
-assignees: ''
-
----
 
 ## Wrong / Incorrect Answer
 
@@ -69,10 +61,6 @@ assignees: ''
 ### Additional Information
 <!-- Anything else that might help reproduce or diagnose the issue. -->
 
-**Steps to reproduce:**
-1. 
-2. 
-3. 
 
 **Additional context:**
 
