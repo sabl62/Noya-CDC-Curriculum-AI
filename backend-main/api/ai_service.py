@@ -146,6 +146,9 @@ _DEEPSEEK_MODEL = "deepseek-v4-flash-free"
 _DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
 _CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
+_KIRA_ENDPOINT = "https://kiraai.vn/api/v1"
+_KIRA_MODEL_FREE = "deepseek-v4-flash-free"
+_KIRA_MODEL_PAID = "deepseek-v4-flash"
 
 
 class AIService:
@@ -162,6 +165,12 @@ class AIService:
 
         # Setup DeepSeek keys (used via httpx — no openai dependency needed)
         self.deepseek_keys = self._get_api_keys("DEEPSEEK")
+
+        # Setup Groq keys (used for title generation + question classification)
+        self.groq_keys = self._get_api_keys("GROQ")
+
+        # Setup Kira AI keys (primary provider — OpenAI-compatible)
+        self.kira_keys = self._get_api_keys("KIRA")
 
         # RAG is initialized eagerly in apps.py ready() via get_rag_service().
         if RAG_AVAILABLE:
@@ -440,6 +449,38 @@ class AIService:
                 return text.strip()
         raise Exception("Empty Groq response")
 
+    def _call_kira(
+        self, api_key: str, model: str, prompt: str, system_prompt: str,
+        max_output_tokens: int, timeout: int
+    ) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": max_output_tokens,
+        }
+        with httpx.Client(timeout=timeout) as http:
+            resp = http.post(
+                _KIRA_ENDPOINT + "/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                content=json.dumps(payload),
+            )
+            if resp.status_code == 429:
+                raise Exception("Kira rate limited")
+            resp.raise_for_status()
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if text:
+                return text.strip()
+        raise Exception("Empty Kira response")
+
     def _classify_with_groq(self, api_key: str, message: str) -> str:
         system_prompt = """Classify the following student question into exactly one category.
 Respond with ONLY one word: "simple", "complex", or "diagram".
@@ -456,14 +497,13 @@ Rules:
 
         Returns "simple", "complex", or "diagram".
         """
-        key = os.environ.get("GROQ_API_KEY", "").strip()
-        if key:
+        for key in self.groq_keys:
             try:
                 result = self._classify_with_groq(key, message)
                 if result in ("simple", "complex", "diagram"):
                     return result
             except Exception as e:
-                print(f"[AI] Groq classifier failed (falling back to rules): {e}")
+                print(f"[AI] Groq classifier key failed (trying next): {e}")
 
         # Rule-based fallback
         text = (message or "").strip().lower()
@@ -524,20 +564,38 @@ Rules:
 
     def _try_deepseek(
         self, prompt: str, system_prompt: str, max_output_tokens: int,
-        timeout: int, errors: list
+        timeout: int, plan_tier: str, errors: list
     ) -> str:
         if not self.deepseek_keys:
             return ""
-        model = _DEEPSEEK_MODEL
+        model = _DEEPSEEK_MODEL if plan_tier == "free" else "deepseek-v4-flash"
         for idx, key in enumerate(self.deepseek_keys, start=1):
             try:
                 return self._call_deepseek(key, model, prompt, system_prompt, max_output_tokens, timeout)
             except Exception as e:
                 err_msg = str(e).lower()
                 if "429" in err_msg or "rate" in err_msg:
-                    errors.append(f"DeepSeek key {idx} exhausted: {e}")
+                    errors.append(f"DeepSeek {model} key {idx} exhausted: {e}")
                 else:
-                    errors.append(f"DeepSeek key {idx} error: {e}")
+                    errors.append(f"DeepSeek {model} key {idx} error: {e}")
+        return ""
+
+    def _try_kira(
+        self, prompt: str, system_prompt: str, max_output_tokens: int,
+        timeout: int, plan_tier: str, errors: list
+    ) -> str:
+        if not self.kira_keys:
+            return ""
+        model = _KIRA_MODEL_PAID if plan_tier == "paid" else _KIRA_MODEL_FREE
+        for idx, key in enumerate(self.kira_keys, start=1):
+            try:
+                return self._call_kira(key, model, prompt, system_prompt, max_output_tokens, timeout)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "429" in err_msg or "rate" in err_msg:
+                    errors.append(f"Kira {model} key {idx} exhausted: {e}")
+                else:
+                    errors.append(f"Kira {model} key {idx} error: {e}")
         return ""
 
     def _generate(
@@ -552,52 +610,71 @@ Rules:
         category = self._classify_question(prompt)
 
         # ── Routing logic ──────────────────────────────────────
-        #   simple     → DeepSeek first, Gemini fallback
-        #   complex    → Gemini first, DeepSeek fallback
-        #   diagram    → Gemini first, DeepSeek fallback
+        #   DeepSeek (primary) → Kira (backup) → Gemini (final fallback)
+        #   simple     → DeepSeek first, then Kira, then Gemini
+        #   complex    → DeepSeek first, then Gemini, then Kira
+        #   diagram    → DeepSeek first, then Gemini, then Kira
         #   quota hit  → cross-over to other provider
 
         if category == "simple":
-            result = self._try_deepseek(prompt, system_prompt, max_output_tokens, timeout, errors)
+            result = self._try_deepseek(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
+            if result:
+                return result
+            result = self._try_kira(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
             if result:
                 return result
             result = self._try_gemini(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
             if result:
                 return result
         else:
+            result = self._try_deepseek(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
+            if result:
+                return result
             result = self._try_gemini(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
             if result:
                 return result
-            result = self._try_deepseek(prompt, system_prompt, max_output_tokens, timeout, errors)
+            result = self._try_kira(prompt, system_prompt, max_output_tokens, timeout, plan_tier, errors)
             if result:
                 return result
 
         raise Exception("All providers exhausted: " + " | ".join(errors))
 
     def generate_title(self, user_message: str) -> str:
-        """Generate a short, specific title via Groq (fast/cheap), fallback to heuristic."""
-        groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if groq_key:
-            system_prompt = (
-                "You generate short chat titles for a student study assistant. "
-                "Rules:\n"
-                "- 3 to 6 words maximum\n"
-                "- Be SPECIFIC to the topic (mention the concept, not just 'question')\n"
-                "- Use title case\n"
-                "- Never start with 'Ask', 'Solve', 'Explain', 'This' — start with the topic name\n"
-                "- Examples of GOOD titles: 'Compound Interest Formula', 'Photosynthesis Process', 'Quadratic Equations', 'Newton's Laws of Motion'\n"
-                "- Examples of BAD titles: 'Solve Exercise', 'This Simply', 'Math Question', 'Study Help'\n"
-                "- Respond with ONLY the title, no quotes, no punctuation"
-            )
-            prompt = f"Student's first message: {user_message[:200]}"
+        """Generate a short, specific title via Kira/Groq (fast/cheap), fallback to heuristic."""
+        system_prompt = (
+            "You generate short chat titles for a student study assistant. "
+            "Rules:\n"
+            "- 3 to 6 words maximum\n"
+            "- Be SPECIFIC to the topic (mention the concept, not just 'question')\n"
+            "- Use title case\n"
+            "- Never start with 'Ask', 'Solve', 'Explain', 'This' — start with the topic name\n"
+            "- Examples of GOOD titles: 'Compound Interest Formula', 'Photosynthesis Process', 'Quadratic Equations', 'Newton's Laws of Motion'\n"
+            "- Examples of BAD titles: 'Solve Exercise', 'This Simply', 'Math Question', 'Study Help'\n"
+            "- Respond with ONLY the title, no quotes, no punctuation"
+        )
+        prompt = f"Student's first message: {user_message[:200]}"
+
+        # Try Kira keys first (fast, cheap)
+        for key in self.kira_keys:
             try:
-                result = self._call_groq(groq_key, prompt, system_prompt, max_tokens=20, timeout=8)
+                result = self._call_kira(key, _KIRA_MODEL_FREE, prompt, system_prompt, max_tokens=20, timeout=8)
                 if result:
                     result = result.strip().strip('"\'').strip(".!")
                     if 2 <= len(result.split()) <= 6 and len(result) <= 50:
                         return result
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[AI] Kira title key failed (trying next): {e}")
+
+        # Try Groq keys next
+        for key in self.groq_keys:
+            try:
+                result = self._call_groq(key, prompt, system_prompt, max_tokens=20, timeout=8)
+                if result:
+                    result = result.strip().strip('"\'').strip(".!")
+                    if 2 <= len(result.split()) <= 6 and len(result) <= 50:
+                        return result
+            except Exception as e:
+                print(f"[AI] Groq title key failed (trying next): {e}")
 
         # Heuristic fallback
         title = (user_message or "").strip()
@@ -687,6 +764,21 @@ CRITICAL RULES:
 5. ANTI-HALLUCINATION: Do NOT invent or guess which exercise number or question the student is asking about. If the student says "solve exercise 7.3 question 9", look for that exact question in the provided textbook content. If the exact question text is not found in the content, say "I could not find this specific question in the provided textbook content" and ask the student to provide the exact question text. NEVER make up a question that was not provided by the student.
 6. NEVER modify, reinterpret, or "improve" the student's question. Answer exactly what they asked, not what you think they meant.
 7. SAMPLE/EXAMPLE GENERATION: When the student explicitly asks you to prepare, create, write, or generate a sample (e.g., "prepare a sample brochure", "give an example of", "write a sample"), you SHOULD create a well-structured example based on the guidelines, structure, or format described in the textbook content. Use the textbook's instructions as a template and fill it with realistic, appropriate content. This is NOT hallucination — it is applying what the textbook teaches. Always note that the sample is an illustrative example based on the chapter's guidelines.
+8. DIAGRAMS: When asked to draw, sketch, or illustrate a diagram, use the appropriate format:
+   - Venn diagrams: Use ```venn code block with this format:
+     ```
+     venn
+     sets: S, M, N
+     S_only: 20%
+     M_only: 20%
+     N_only: 20%
+     S_M: 5%
+     M_N: 15%
+     S_N: 10%
+     S_M_N: 5%
+     ```
+   - Flowcharts, cycles, processes, hierarchies: Use ```mermaid code block.
+   - Do NOT use TikZ or LaTeX for diagrams.
 
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
@@ -775,6 +867,7 @@ Do NOT invent facts outside the provided textbook context for factual questions.
 Do NOT invent or guess which question the student is asking about. If the exact question is not in the context, say so and ask for clarification.
 If the question is completely outside the CDC syllabus, reply exactly: {out_of_scope_response}
 {"SAMPLE/EXAMPLE GENERATION: The student is asking for a sample or creative output. Use the textbook's guidelines, structure, or format as a template and create a well-structured example with realistic content. Always note that the sample is illustrative and based on the chapter's guidelines." if is_generative else ""}
+DIAGRAMS: When asked to draw a Venn diagram, use ```venn code block with format: sets: A, B, C / A_only: X% / B_only: Y% / etc. For flowcharts/cycles, use ```mermaid. Do NOT use TikZ.
 
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)

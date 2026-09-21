@@ -27,7 +27,7 @@ __pycache__/
 .kilo/
 .qodo/
 .agents/
-
+.claude/
 # OS
 .DS_Store
 Thumbs.db
@@ -52,3 +52,6 @@ media/
 # Project artifacts
 tmp/
 files.zip
+
+todo.md
+PRODUCT.md

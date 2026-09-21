@@ -1,8 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import mermaid from "mermaid";
+
+mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
 
 // Map of language identifiers to display names
 const languageNames = {
@@ -29,6 +32,8 @@ const languageNames = {
   yml: "YAML",
   markdown: "Markdown",
   md: "Markdown",
+  mermaid: "Mermaid",
+  venn: "Venn Diagram",
 };
 
 const getLanguageName = (lang) => {
@@ -36,11 +41,186 @@ const getLanguageName = (lang) => {
   return languageNames[lang.toLowerCase()] || lang;
 };
 
+// Mermaid diagram renderer
+const MermaidDiagram = ({ code }) => {
+  const ref = useRef(null);
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState(null);
+  const renderedRef = useRef(false);
+
+  useEffect(() => {
+    if (!code || renderedRef.current) return;
+    renderedRef.current = true;
+    const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    try {
+      mermaid.render(id, code.trim()).then(({ svg: rendered }) => {
+        setSvg(rendered);
+      }).catch((err) => {
+        setError(err.message || "Failed to render diagram");
+      });
+    } catch (err) {
+      setError(err.message || "Failed to render diagram");
+    }
+  }, [code]);
+
+  if (error) {
+    return (
+      <div className="my-3 rounded-[var(--radius-sm)] border border-red-300 bg-red-50 p-3 text-[13px] text-red-700">
+        Diagram error: {error}
+      </div>
+    );
+  }
+
+  return (
+    <div ref={ref} className="my-3 flex justify-center overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border)] bg-white p-4">
+      {svg ? (
+        <div dangerouslySetInnerHTML={{ __html: svg }} />
+      ) : (
+        <div className="text-[13px] text-[var(--ink-faint)]">Loading diagram...</div>
+      )}
+    </div>
+  );
+};
+
+// Venn diagram parser - tracks whether values have %
+const parseVennData = (code) => {
+  const lines = code.trim().split("\n");
+  const data = { sets: [], regions: {}, hasPercent: false };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("sets:")) {
+      data.sets = trimmed.replace("sets:", "").split(",").map((s) => s.trim());
+    } else if (trimmed.includes(":")) {
+      const [key, val] = trimmed.split(":").map((s) => s.trim());
+      if (val.includes("%")) data.hasPercent = true;
+      data.regions[key] = parseFloat(val) || 0;
+    }
+  }
+  return data.sets.length >= 2 ? data : null;
+};
+
+// Venn diagram renderer - works with ANY set names
+const VennDiagram = ({ code }) => {
+  const data = parseVennData(code);
+  if (!data) {
+    return (
+      <div className="my-3 rounded-[var(--radius-sm)] border border-red-300 bg-red-50 p-3 text-[13px] text-red-700">
+        Invalid Venn diagram format.
+      </div>
+    );
+  }
+
+  const { sets, regions, hasPercent } = data;
+  const n = sets.length;
+  const W = 440, H = 360;
+  const cx = W / 2, cy = H / 2 + 15;
+  const R = 95, spread = 50;
+
+  const angles = n === 3
+    ? [Math.PI / 2, Math.PI / 2 + (2 * Math.PI) / 3, Math.PI / 2 + (4 * Math.PI) / 3]
+    : n === 2 ? [Math.PI, 0] : [0];
+
+  const centers = angles.map((a) => ({
+    x: cx + spread * Math.cos(a),
+    y: cy - spread * Math.sin(a),
+  }));
+
+  // Compute label positions relative to circle centers
+  const pos = {};
+  if (n === 3) {
+    const [s0, s1, s2] = sets;
+    // Only regions: push outward from each circle center toward the non-overlapping edge
+    pos[s0] = { x: centers[0].x - 30, y: centers[0].y - 35 };
+    pos[s1] = { x: centers[1].x + 30, y: centers[1].y - 35 };
+    pos[s2] = { x: centers[2].x, y: centers[2].y + 40 };
+    // Pairwise intersections: midpoint between two circle centers
+    pos[s0 + "_" + s1] = { x: (centers[0].x + centers[1].x) / 2, y: (centers[0].y + centers[1].y) / 2 - 12 };
+    pos[s1 + "_" + s2] = { x: (centers[1].x + centers[2].x) / 2 + 12, y: (centers[1].y + centers[2].y) / 2 + 8 };
+    pos[s0 + "_" + s2] = { x: (centers[0].x + centers[2].x) / 2 - 12, y: (centers[0].y + centers[2].y) / 2 + 8 };
+    // Triple intersection: exact center
+    pos[s0 + "_" + s1 + "_" + s2] = { x: cx, y: cy };
+  } else if (n === 2) {
+    const [s0, s1] = sets;
+    pos[s0] = { x: centers[0].x - 25, y: centers[0].y };
+    pos[s1] = { x: centers[1].x + 25, y: centers[1].y };
+    pos[s0 + "_" + s1] = { x: cx, y: cy };
+  } else {
+    pos[sets[0]] = { x: cx, y: cy };
+  }
+
+  const norm = (key) => {
+    const v = regions[key];
+    return v !== undefined ? parseFloat(v) || 0 : undefined;
+  };
+
+  const regionLabels = {};
+  if (n === 3) {
+    const [s0, s1, s2] = sets;
+    regionLabels[s0] = norm(s0 + "_only") ?? norm(s0) ?? 0;
+    regionLabels[s1] = norm(s1 + "_only") ?? norm(s1) ?? 0;
+    regionLabels[s2] = norm(s2 + "_only") ?? norm(s2) ?? 0;
+    regionLabels[s0 + "_" + s1] = norm(s0 + "_" + s1) ?? 0;
+    regionLabels[s1 + "_" + s2] = norm(s1 + "_" + s2) ?? 0;
+    regionLabels[s0 + "_" + s2] = norm(s0 + "_" + s2) ?? 0;
+    regionLabels[s0 + "_" + s1 + "_" + s2] = norm(s0 + "_" + s1 + "_" + s2) ?? 0;
+  } else if (n === 2) {
+    const [s0, s1] = sets;
+    regionLabels[s0] = norm(s0 + "_only") ?? norm(s0) ?? 0;
+    regionLabels[s1] = norm(s1 + "_only") ?? norm(s1) ?? 0;
+    regionLabels[s0 + "_" + s1] = norm(s0 + "_" + s1) ?? 0;
+  } else {
+    regionLabels[sets[0]] = norm(sets[0]) ?? norm(sets[0] + "_only") ?? 0;
+  }
+
+  const colors = ["#4A90D9", "#E67E22", "#27AE60"];
+  const formatVal = (v) => hasPercent ? v + "%" : String(v);
+
+  return (
+    <div className="my-3 flex justify-center overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border)] bg-white p-4">
+      <svg width={W} height={H} viewBox={"0 0 " + W + " " + H}>
+        <rect x="0" y="0" width={W} height={H} fill="#fafafa" rx="8" />
+        {centers.map((c, i) => (
+          <circle key={i} cx={c.x} cy={c.y} r={R}
+            fill={colors[i % colors.length]} fillOpacity="0.15"
+            stroke={colors[i % colors.length]} strokeWidth="2" />
+        ))}
+        {n === 3 && centers.map((c, i) => {
+          var dy = i < 2 ? -R - 14 : R + 24;
+          return (
+            <text key={"lbl-" + i} x={c.x} y={c.y + dy}
+              textAnchor="middle" fontSize="14" fontWeight="bold" fill={colors[i]}>
+              {sets[i]}
+            </text>
+          );
+        })}
+        {Object.entries(pos).map(([key, coordinate]) => {
+          var value = regionLabels[key];
+          if (value === undefined || value === null || !coordinate) return null;
+          return (
+            <text key={key} x={coordinate.x} y={coordinate.y}
+              textAnchor="middle" fontSize="14" fontWeight="600" fill="#333">
+              {formatVal(value)}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+};
+
 // Code block with language header
 const CodeBlock = ({ children, className }) => {
   const match = /language-(\w+)/.exec(className || "");
   const language = match ? match[1] : null;
   const displayName = getLanguageName(language);
+
+  if (language === "mermaid") {
+    return <MermaidDiagram code={children} />;
+  }
+
+  if (language === "venn") {
+    return <VennDiagram code={children} />;
+  }
 
   return (
     <div className="my-3 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--border-strong)]">

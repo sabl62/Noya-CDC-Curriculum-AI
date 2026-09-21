@@ -69,17 +69,16 @@ The product philosophy: *"A calm study companion that reads with you, answers fr
 
 | Category | Technology |
 |----------|-----------|
-| **Frontend** | React 18, Vite 5, React Router 6, Tailwind CSS 3 |
+| **Frontend** | React 18, Vite 5, React Router 6, Tailwind CSS 3, KaTeX (LaTeX math), Lucide icons |
 | **Backend** | Django 4.2+, Django REST Framework |
 | **Authentication** | SimpleJWT (access / refresh tokens with blacklisting) |
-| **Database** | PostgreSQL (Supabase) / SQLite (development) |
+| **Database** | PostgreSQL (Supabase) / SQLite (development fallback) |
 | **Vector Store** | Qdrant Cloud (384-d embeddings) |
 | **Embedding Model** | `paraphrase-multilingual-MiniLM-L12-v2` (Sentence Transformers) |
-| **Primary LLM** | Google Gemini 2.5 Flash (free users), Gemini 2.5 Pro (paid users) |
-| **Billing** | Stripe (subscription checkout, webhooks, plan management) |
-| **PDF Parsing** | pypdf |
+| **LLM Providers** | Gemini (primary), DeepSeek (fallback), Kira AI (backup), Groq (titles/classification) |
+| **PDF Parsing** | pypdf + LangChain |
 | **Caching** | 4-tier semantic cache + in-memory LRU (512 entries) |
-| **Styling** | CSS custom properties, Tailwind utility classes, Lucide icons |
+| **Styling** | CSS custom properties, Tailwind utility classes |
 
 ---
 
@@ -117,19 +116,20 @@ The product philosophy: *"A calm study companion that reads with you, answers fr
 │   │                                                         │   │
 │   │   ┌──────────────┐   ┌──────────────┐   ┌────────────┐ │   │
 │   │   │ Gemini Client │   │ RAGService   │   │ Semantic   │ │   │
-│   │   │ (5 API keys)  │   │ (ChromaDB)   │   │ Cache      │ │   │
-│   │   └──────┬───────┘   └──────┬───────┘   │ (4 tiers)  │ │   │
-│   │          │                  │           └──────┬─────┘ │   │
+│   │   │ DeepSeek      │   │ (Qdrant)     │   │ Cache      │ │   │
+│   │   │ Kira AI       │   │              │   │ (4 tiers)  │ │   │
+│   │   │ Groq          │   └──────┬───────┘   └──────┬─────┘ │   │
+│   │   └──────┬───────┘          │                  │       │   │
 │   └──────────┼──────────────────┼──────────────────┼───────┘   │
 │              │                  │                  │           │
 └──────────────┼──────────────────┼──────────────────┼───────────┘
                │                  │                  │
          ┌─────▼────┐     ┌──────▼──────┐    ┌──────▼──────┐
-         │  Gemini  │     │  ChromaDB   │    │ PostgreSQL  │
-         │  API     │     │  (384-d     │    │ (Supabase)  │
-         │          │     │   vectors)  │    │             │
-         └──────────┘     └─────────────┘    │ • users     │
-                                             │ • sessions  │
+         │  Gemini  │     │  Qdrant     │    │ PostgreSQL  │
+         │  DeepSeek│     │  Cloud      │    │ (Supabase)  │
+         │  Kira AI │     │  (384-d     │    │             │
+         │  Groq    │     │   vectors)  │    │ • users     │
+         └──────────┘     └─────────────┘    │ • sessions  │
                                              │ • messages  │
                                              │ • cache     │
                                              │ • billing   │
@@ -147,12 +147,12 @@ User Question
 ┌──────────────────────────────────────────────────────┐
 │                 AIService.chat()                      │
 │                                                      │
-│  ┌─ Chapter title provided? ─┐                       │
+  │  ┌─ Chapter title provided? ─┐                       │
 │  │          │                │                       │
 │  │         YES               NO                      │
 │  │          │                │                       │
 │  │          ▼                ▼                       │
-│  │  Extract PDF text    ChromaDB similarity          │
+│  │  Extract PDF text    Qdrant similarity            │
 │  │  for chapter pages   search (top-5 chunks)        │
 │  │          │                │                       │
 │  │          ▼                ▼                       │
@@ -243,7 +243,7 @@ Request
 ## File Structure
 
 ```
-padhai/
+Noya/
 │
 ├── frontend/                          # React + Vite SPA
 │   ├── public/
@@ -272,8 +272,8 @@ padhai/
 │   ├── backend/
 │   │   └── settings.py                # Django config (DB, JWT, CORS, cache)
 │   ├── api/
-│   │   ├── ai_service.py              # LLM orchestration (Gemini)
-│   │   ├── rag_service.py             # ChromaDB vector search + PDF ingestion
+│   │   ├── ai_service.py              # LLM orchestration (Gemini/DeepSeek/Kira)
+│   │   ├── rag_service.py             # Qdrant vector search + PDF ingestion
 │   │   ├── semantic_cache.py          # 4-tier semantic caching system
 │   │   ├── chapter_pdf_context.py     # Page-range maps per subject/chapter
 │   │   ├── curriculum_scope.py        # Subject detection + out-of-scope handling
@@ -285,13 +285,11 @@ padhai/
 │   │   ├── admin.py                   # Django admin configuration
 │   │   └── apps.py                    # App config + RAG warmup
 │   ├── cdc_curriculum/                # CDC textbook PDFs (class_10/)
-│   ├── chroma_data/                   # ChromaDB persistent storage
 │   ├── manage.py                      # Django management script
 │   └── requirements.txt               # Python dependencies
 │
 ├── .env.example                       # Environment variable template
 ├── PRODUCT.md                         # Product vision & design principles
-├── AGENTS.md                          # Development instructions
 └── README.md                          # This file
 ```
 
@@ -301,30 +299,57 @@ padhai/
 
 ### Prerequisites
 
-- Python 3.10+
-- Node.js 18+
-- npm or yarn
+- **Python 3.10+** — [python.org](https://python.org/downloads)
+- **Node.js 18+** — [nodejs.org](https://nodejs.org)
+- **Git** — [git-scm.com](https://git-scm.com)
 
-### 1. Clone & Setup Environment
+### 1. Clone the Repository
 
 ```bash
 git clone <repo-url>
-cd padhai
+cd Noya
+```
+
+### 2. Configure Environment Variables
+
+```bash
+# Windows (Command Prompt)
+copy .env.example backend-main\.env
+
+# Windows (PowerShell)
+Copy-Item .env.example backend-main\.env
+
+# macOS / Linux
 cp .env.example backend-main/.env
 ```
 
-### 2. Backend Setup
+**You MUST manually edit `backend-main/.env`** with your own API keys and database URL. At minimum, set:
+
+- `SECRET_KEY` — generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
+- `GEMINI_API_KEY_1` — from [Google AI Studio](https://aistudio.google.com/apikey)
+- `QDRANT_URL` + `QDRANT_API_KEY` — from [Qdrant Cloud](https://cloud.qdrant.io)
+- `DATABASE_URL` — PostgreSQL connection string (Supabase, Neon, or local). Leave empty to use SQLite for local dev.
+
+Optional but recommended for full functionality:
+- `DEEPSEEK_API_KEY_1` — fallback LLM provider ([DeepSeek](https://platform.deepseek.com))
+- `GROQ_API_KEY_1` — title generation & question classification ([Groq](https://console.groq.com))
+- `KIRAA_API_KEY_1` — backup LLM provider ([Kira AI](https://kiraai.vn))
+
+### 3. Backend Setup
 
 ```bash
 cd backend-main
 
-# Create and activate virtual environment
+# Create virtual environment
 python -m venv venv
 
-# Windows
-venv\Scripts\activate
-# macOS / Linux
-# source venv/bin/activate
+# Activate virtual environment (run ONLY the one for your OS)
+# Windows (PowerShell)
+.\venv\Scripts\Activate.ps1
+# Windows (Command Prompt)
+venv\Scripts\activate.bat
+# Windows (Git Bash) / macOS / Linux
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -336,9 +361,11 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-The backend starts at `http://localhost:8000`.
+Backend starts at **http://localhost:8000**
 
-### 3. Frontend Setup
+### 4. Frontend Setup
+
+Open a **new terminal** (keep the backend running):
 
 ```bash
 cd frontend
@@ -350,44 +377,31 @@ npm install
 npm run dev
 ```
 
-The frontend starts at `http://localhost:5173`.
-
-### 4. Ingest PDF Textbooks
-
-Place CDC curriculum PDFs in `backend-main/cdc_curriculum/class_10/`, then:
-
-```bash
-curl -X POST http://localhost:8000/rag/init/
-```
-
-This extracts, chunks, embeds, and indexes all PDFs into ChromaDB.
+Frontend starts at **http://localhost:5173**
 
 ### 5. Open the App
 
-Navigate to `http://localhost:5173`, register an account, select a subject, and start studying.
+Navigate to **http://localhost:5173**, register an account, select a subject, and start studying.
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `backend-main/.env` and configure:
+Copy `.env.example` to `backend-main/.env` (see Step 2 above) and configure:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SECRET_KEY` | Yes | Django secret key (generate with `openssl rand -hex 32`) |
-| `DATABASE_URL` | No | Supabase PostgreSQL URL. Falls back to SQLite if empty |
-| `GEMINI_API_KEY_1` | Yes | Google Gemini API key (up to 5 keys for load balancing) |
-| `GEMINI_MODEL` | No | Default: `gemini-2.5-flash`. Paid users get `gemini-2.5-pro` |
-
-### Optional Provider Keys
-
-Configure these in `.env` for alternative LLM providers (not currently wired in code):
-
-- `GROQ_API_KEY_1..5` + `GROQ_MODEL`
-- `CEREBRAS_API_KEY_1..5` + `CEREBRAS_MODEL`
-- `DEEPSEEK_API_KEY_1..5` + `DEEPSEEK_ENDPOINT` + `DEEPSEEK_MODEL`
-- `KIMI_API_KEY_1..5` + `KIMI_ENDPOINT` + `KIMI_MODEL`
-- `QWEN_API_KEY_1..5` + `QWEN_ENDPOINT` + `QWEN_MODEL`
+| `SECRET_KEY` | Yes | Django secret key (generate with `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `DATABASE_URL` | No | PostgreSQL URL. Falls back to SQLite if empty |
+| `GEMINI_API_KEY_1` | Yes | Google Gemini API key ([get one here](https://aistudio.google.com/apikey)) |
+| `QDRANT_URL` | Yes | Qdrant Cloud cluster URL |
+| `QDRANT_API_KEY` | Yes | Qdrant Cloud API key |
+| `DEEPSEEK_API_KEY_1` | No | DeepSeek API key (fallback LLM provider) |
+| `KIRAA_API_KEY_1` | No | Kira AI API key (backup LLM provider) |
+| `GROQ_API_KEY_1` | No | Groq API key (title generation + question classification) |
+| `DEBUG` | No | Set to `true` for development (default: `false`) |
+| `ALLOWED_HOSTS` | No | Comma-separated list of allowed hosts (default: `localhost,127.0.0.1`) |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins (default: `http://localhost:5173`) |
 
 ### Frontend Variables
 
@@ -396,6 +410,8 @@ Create `frontend/.env`:
 ```
 VITE_API_URL=http://localhost:8000
 ```
+
+Firebase variables are legacy and not required for local development.
 
 ---
 
