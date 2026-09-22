@@ -1,7 +1,3 @@
-"""
-RAG Service for Noya - Production Ready
-Uses Qdrant Cloud for vector storage and retrieval
-"""
 
 import os
 import json
@@ -12,7 +8,6 @@ from pathlib import Path
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
-# Try to import required libraries
 try:
     from qdrant_client import QdrantClient
     from qdrant_client.models import (
@@ -46,7 +41,6 @@ EMBEDDING_DIMENSION = 384  # paraphrase-multilingual-MiniLM-L12-v2
 
 
 class RAGService:
-    """Production RAG service using Qdrant Cloud and Sentence Transformers"""
 
     def __init__(self):
         self.initialized = False
@@ -148,12 +142,12 @@ class RAGService:
         processed = 0
         errors = []
 
-        # Use rglob to find all PDFs recursively
+        
         pdf_files = list(curriculum_path.rglob("*.pdf"))
 
         for pdf_path in pdf_files:
             try:
-                # Get class name from parent folder (e.g., class_10)
+                
                 class_name = pdf_path.parent.name
                 subject = pdf_path.stem
                 print(f"[RAG] Processing: {class_name}/{subject}")
@@ -260,7 +254,6 @@ class RAGService:
                 )
             )
 
-        # Upsert in batches of 100 to avoid overwhelming the API
         batch_size = 100
         for start in range(0, len(points), batch_size):
             batch = points[start : start + batch_size]

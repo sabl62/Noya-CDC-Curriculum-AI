@@ -149,13 +149,16 @@ venv\Scripts\activate.bat
 ```
 </details>
 
-Then install dependencies and run the server:
+Then install dependencies, run migrations, and initialize the RAG pipeline:
 
 ```bash
 pip install -r requirements.txt
 python manage.py migrate
+python manage.py initialize_rag
 python manage.py runserver
 ```
+
+> Use `python manage.py initialize_rag --force-rebuild` to re-chunk and re-index
 
 Backend runs at **http://localhost:8000**
 
