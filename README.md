@@ -40,7 +40,7 @@ In Simple Language, **Noya is an AI for grade 10 books**. It is built for Nepali
 
 - **Textbook Related AI Chat** — Answers come directly from CDC Textbooks (Janak Sikshya Samagri)
 - **Subject & Chapter Selection** — Science, Mathematics, Optional Mathematics, English (Social Studies & Nepali coming soon)
-- **4-Tier Semantic Cache** — Built as Noya's own brain, Discussed Later in this Document.
+- **4-Tier Semantic Cache** — Built as Noya's own brain, Check The docs folder.
 - **JWT Authentication** — Secure Authentication System with token rotation.
 - **Dark / Light Theme** — Clean, minimal design with Light and Dark themes.
 - **Markdown + LaTeX Rendering** — LaTeX Math Support, Same mathematical Symbols as your textbook.
