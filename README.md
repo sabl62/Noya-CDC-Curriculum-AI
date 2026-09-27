@@ -22,7 +22,7 @@
 - [About](#about)
 - [Features](#features)
 - [Local Development](#local-development)
-- [Enviroment Variables](#enviroment-variables)
+- [Enviroment Variables](#environment-variables)
 - [Tech Stack](#tech-stack)
 - [File Structure](#file-structure)
 
