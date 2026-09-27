@@ -391,17 +391,13 @@ class RAGService:
 
         return {"issues": issues, "warnings": warnings}
 
-
-# Singleton instance setup
 _rag_service = None
-
 
 def get_rag_service() -> RAGService:
     global _rag_service
     if _rag_service is None:
         _rag_service = RAGService()
     return _rag_service
-
 
 def initialize_rag(force_rebuild: bool = False) -> Dict[str, Any]:
     rag = get_rag_service()
