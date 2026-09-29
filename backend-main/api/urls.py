@@ -12,6 +12,7 @@ from .views import (
     BillingPlansView,
     BillingCheckoutView,
     BillingStatusView,
+    BillingVerifyView,
     BillingWebhookView,
     ChatView,
     ChatHistoryView,
@@ -50,6 +51,7 @@ urlpatterns = [
     path('billing/plans/', BillingPlansView.as_view(), name='billing_plans'),
     path('billing/checkout/', BillingCheckoutView.as_view(), name='billing_checkout'),
     path('billing/status/', BillingStatusView.as_view(), name='billing_status'),
+    path('billing/verify/', BillingVerifyView.as_view(), name='billing_verify'),
     path('billing/webhook/', BillingWebhookView.as_view(), name='billing_webhook'),
     
     # SIKSYA AI Chat

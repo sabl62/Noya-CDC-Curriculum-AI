@@ -80,6 +80,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [sourcesPanel, setSourcesPanel] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [limitPopup, setLimitPopup] = useState(null);
+  const [limitBanner, setLimitBanner] = useState(null);
+  const [rateNotice, setRateNotice] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -87,6 +90,20 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const revealTimerRef = useRef(null);
   const sessionIdRef = useRef(null);
   const scrollContainerRef = useRef(null);
+  const dismissedLimitRef = useRef(null);
+
+  useEffect(() => {
+    if (!rateNotice) return undefined;
+    const timer = setTimeout(() => setRateNotice(false), 8000);
+    return () => clearTimeout(timer);
+  }, [rateNotice]);
+
+  const dismissLimitPopup = () => {
+    if (!limitPopup) return;
+    dismissedLimitRef.current = limitPopup.limitType;
+    setLimitBanner(limitPopup);
+    setLimitPopup(null);
+  };
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -286,7 +303,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
     setInput("");
     setMessages((previous) => [
       ...previous,
-      { role: "user", content: message },
+      { role: "user", content: message, id: `user-${streamingId}` },
       {
         role: "assistant",
         content: "",
@@ -325,6 +342,34 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         }),
         signal: controller.signal,
       });
+
+      if (response.status === 429) {
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch {
+          payload = {};
+        }
+        const limitType = ["daily", "monthly", "rate"].includes(payload.limit_type)
+          ? payload.limit_type
+          : "daily";
+        const info = { limitType, plan: payload.plan || user?.plan_tier || "free" };
+
+        // Undo the optimistic turn — the message was not answered.
+        setMessages((previous) => previous.filter((item) => item.id !== streamingId));
+        setInput(message);
+
+        if (limitType === "rate") {
+          setRateNotice(true);
+        } else if (dismissedLimitRef.current === limitType) {
+          setLimitBanner(info);
+        } else {
+          setLimitPopup(info);
+        }
+
+        if (creatingNewSession) onSessionPending?.(false);
+        return;
+      }
 
       if (!response.ok || !response.body) {
         throw new Error("Chat request failed");
@@ -410,6 +455,11 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           }
         }
       }
+
+      // A delivered answer means any earlier quota/rate notice no longer applies.
+      setRateNotice(false);
+      setLimitBanner(null);
+      dismissedLimitRef.current = null;
 
       refreshSessions({ silent: true });
       if (creatingNewSession) onSessionPending?.(false);
@@ -504,6 +554,32 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         </div>
 
         <footer className="chat-composer-wrap">
+          {rateNotice && (
+            <div className="chat-limit-banner rate" role="status">
+              <span>You are sending messages too quickly. Please wait a moment and try again.</span>
+              <button type="button" onClick={() => setRateNotice(false)} aria-label="Dismiss">
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          {limitBanner && (
+            <div className="chat-limit-banner" role="status">
+              <span>
+                You have reached your {limitBanner.limitType} limit on chats.
+                {limitBanner.plan !== "paid" ? " Upgrade to pro for more." : " Please try again when your limit resets."}
+              </span>
+              {limitBanner.plan !== "paid" ? (
+                <button type="button" className="chat-limit-banner-upgrade" onClick={() => navigate("/billing")}>
+                  <Zap size={13} />
+                  <span>Upgrade to Pro</span>
+                </button>
+              ) : (
+                <button type="button" onClick={() => setLimitBanner(null)} aria-label="Dismiss">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="chat-composer">
             <label htmlFor="chat-input" className="sr-only">
               Message Noya
@@ -599,6 +675,50 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           theme={theme}
           onToggleTheme={onToggleTheme}
         />
+      )}
+      {limitPopup && (
+        <div className="limit-popup-overlay" onClick={dismissLimitPopup}>
+          <div
+            className="limit-popup"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="limit-popup-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button type="button" className="limit-popup-close" onClick={dismissLimitPopup} aria-label="Close">
+              <X size={17} />
+            </button>
+            <div className="limit-popup-icon">
+              <Clock3 size={20} />
+            </div>
+            <h3 id="limit-popup-title">
+              {limitPopup.limitType === "monthly" ? "Monthly Limit reached!" : "Daily Limit reached!"}
+            </h3>
+            <p>
+              You have reached your {limitPopup.limitType} limit on chats.
+              {limitPopup.plan !== "paid"
+                ? " Upgrade to pro for more."
+                : " Please try again when your limit resets."}
+            </p>
+            {limitPopup.plan !== "paid" ? (
+              <button
+                type="button"
+                className="limit-popup-upgrade"
+                onClick={() => {
+                  dismissLimitPopup();
+                  navigate("/billing");
+                }}
+              >
+                <Zap size={15} />
+                <span>Upgrade to Pro</span>
+              </button>
+            ) : (
+              <button type="button" className="limit-popup-upgrade" onClick={dismissLimitPopup}>
+                Got it
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

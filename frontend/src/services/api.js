@@ -106,7 +106,9 @@ export const profileAPI = {
 export const billingAPI = {
   getPlans: () => api.get('/billing/plans/').then((res) => res.data),
   getStatus: () => api.get('/billing/status/').then((res) => res.data),
-  createCheckoutSession: (plan = 'pro') => api.post('/billing/checkout/', { plan }).then((res) => res.data),
+  createCheckoutSession: (plan = 'pro', provider = '') =>
+    api.post('/billing/checkout/', { plan, provider }).then((res) => res.data),
+  verifyPayment: (payload = {}) => api.post('/billing/verify/', payload).then((res) => res.data),
 };
 
 

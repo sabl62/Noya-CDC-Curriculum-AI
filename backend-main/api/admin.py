@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CacheLookupEvent, ChatMessage, ChatSession, KnowledgeBaseEntry, SemanticAnswerCache, User
+from .models import CacheLookupEvent, ChatMessage, ChatSession, KnowledgeBaseEntry, Payment, SemanticAnswerCache, UsageCounter, User
 
 
 @admin.register(User)
@@ -42,3 +42,25 @@ class CacheLookupEventAdmin(admin.ModelAdmin):
     list_display = ("id", "created_at", "plan_tier", "subject", "decision", "confidence", "latency_ms")
     list_filter = ("decision", "plan_tier", "subject")
     search_fields = ("message", "normalized_query")
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "provider", "plan", "amount", "currency", "status", "reference", "created_at")
+    list_filter = ("provider", "status", "plan")
+    search_fields = ("reference", "provider_reference", "provider_transaction_id", "user__username")
+    readonly_fields = ("raw_response", "created_at", "updated_at")
+
+
+@admin.register(UsageCounter)
+class UsageCounterAdmin(admin.ModelAdmin):
+    list_display = (
+        "key", "user", "daily_count", "daily_limit_reached_at",
+        "monthly_count", "monthly_limit_reached_at", "minute_count", "updated_at",
+    )
+    list_filter = ("daily_limit_reached_at", "monthly_limit_reached_at")
+    search_fields = ("key", "user__username")
+    readonly_fields = ("key", "user", "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return False

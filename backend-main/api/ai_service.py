@@ -698,6 +698,10 @@ Rules:
         Yields:
             {"type": "status", "stage": str, "message": str}
             {"type": "complete", "response": str, "source": str}
+
+        Complete events also flag quota-relevant outcomes:
+            "cached": True     — served from cache/KB (does not count against usage)
+            "ai_failed": True  — the provider failed (does not count against usage)
         """
         context = context or {}
         subject = normalize_subject(context.get("subject", ""))
@@ -749,7 +753,7 @@ Rules:
 
                 if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
                     yield {"type": "status", "stage": "cache_hit", "message": "Found cached answer!"}
-                    yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source}
+                    yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
                     return
 
                 yield {"type": "status", "stage": "generating", "message": "Generating detailed answer from textbook..."}
@@ -833,7 +837,7 @@ INSTRUCTIONS:
                     return
                 except Exception as e:
                     print(f"[AI] Provider failed (chapter path): {e}")
-                    yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error"}
+                    yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error", "ai_failed": True}
                     return
 
         # ─── FALLBACK PATH: Cache → RAG → AI ───
@@ -841,7 +845,7 @@ INSTRUCTIONS:
         cache_decision = cache_service.inspect(message, context, user=user, plan_tier=plan_tier)
         if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
             yield {"type": "status", "stage": "cache_hit", "message": "Found cached answer!"}
-            yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source}
+            yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
             return
 
         yield {"type": "status", "stage": "rag", "message": "Searching curriculum database..."}
@@ -930,7 +934,7 @@ INSTRUCTIONS:
             yield {"type": "complete", "response": response, "source": source_info if source_info else "General Knowledge"}
         except Exception as e:
             print(f"[AI] Provider failed: {e}")
-            yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error"}
+            yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error", "ai_failed": True}
 
     def get_rag_status(self) -> Dict:
         if not getattr(self, 'rag_service', None):

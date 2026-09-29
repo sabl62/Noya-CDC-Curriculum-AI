@@ -45,6 +45,100 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+class Payment(models.Model):
+    """A single plan checkout attempt through a payment gateway."""
+    PROVIDER_CHOICES = [
+        ('esewa', 'eSewa'),
+        ('khalti', 'Khalti'),
+        ('stripe', 'Stripe'),
+    ]
+    STATUS_CHOICES = [
+        ('initiated', 'Initiated'),
+        ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('expired', 'Expired'),
+        ('refunded', 'Refunded'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='payments',
+    )
+    plan = models.CharField(max_length=20, default='pro')
+    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES, db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=10, default='NPR')
+    reference = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text="Merchant order id generated at checkout.",
+    )
+    provider_reference = models.CharField(
+        max_length=128,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text="Gateway handle used for verification (eSewa transaction_uuid / Khalti pidx).",
+    )
+    provider_transaction_id = models.CharField(max_length=128, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='initiated', db_index=True)
+    raw_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.provider}:{self.reference} ({self.status})"
+
+
+class UsageCounter(models.Model):
+    """Rolling chat quotas (daily/monthly) and per-minute rate limit.
+
+    One row per identity (``u:<id>`` for signed-in users, ``ip:<addr>``
+    otherwise). Counters only move when a chat produced a real answer —
+    cache hits and failed AI generations are never charged.
+    """
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='usage_counters',
+    )
+
+    daily_count = models.PositiveIntegerField(default=0)
+    daily_window_start = models.DateTimeField(null=True, blank=True)
+    daily_limit_reached_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set when the daily quota is used up; blocks until +24h.",
+    )
+
+    monthly_count = models.PositiveIntegerField(default=0)
+    monthly_window_start = models.DateTimeField(null=True, blank=True)
+    monthly_limit_reached_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set when the monthly quota is used up; blocks until +30d.",
+    )
+
+    minute_count = models.PositiveIntegerField(default=0)
+    minute_window_start = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.key}: d{self.daily_count}/m{self.monthly_count}"
+
+
 class ChatSession(models.Model):
     """Model for grouping chat messages into conversations"""
     user = models.ForeignKey(

@@ -45,7 +45,7 @@ In Simple Language, **Noya is an AI for grade 10 books**. It is built for Nepali
 - **Dark / Light Theme** — Clean, minimal design with Light and Dark themes.
 - **Markdown + LaTeX Rendering** — LaTeX Math Support, Same mathematical Symbols as your textbook.
 - **Chat Sessions** — Create, continue, and delete conversation histories
-- **Free & Paid Plans** — billing integration with plan-based model selection
+- **Free & Paid Plans** — billing integration with plan-based model selection, paid via **eSewa**, **Khalti**, and Stripe
 
 ---
 
@@ -61,132 +61,36 @@ In Simple Language, **Noya is an AI for grade 10 books**. It is built for Nepali
 
 ---
 
-### 1. Clone the Repository
+### Step1: Clone/Download the Repository:
 
 ```bash
-git clone <repo-url>
-cd Noya
+git clone <repo_url>
 ```
 ---
 
-### 2. Configure Environment Variables
-
-Copy the example env file into `backend-main/`:
-
-<details open>
-<summary><strong>macOS / Linux</strong></summary>
-
-```bash
-cp .env.example backend-main/.env
-```
-</details>
-
-<details>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-```powershell
-Copy-Item .env.example backend-main\.env
-```
-</details>
-
-<details>
-<summary><strong>Windows (Command Prompt)</strong></summary>
-
-```cmd
-copy .env.example backend-main\.env
-```
-</details>
-
-> **You must manually edit `backend-main/.env`** with your own keys before continuing.
-
-**Required:**
-| Variable | Description |
-|---|---|
-| `SECRET_KEY` | Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `GEMINI_API_KEY_1` | From [Google AI Studio](https://aistudio.google.com/apikey) |
-| `QDRANT_URL` + `QDRANT_API_KEY` | From [Qdrant Cloud](https://cloud.qdrant.io) |
-| `DATABASE_URL` | PostgreSQL connection string (Supabase, Neon, or local). Leave empty for SQLite. |
-
-**Optional (for full functionality):**
-| Variable | Purpose |
-|---|---|
-| `DEEPSEEK_API_KEY_1` | Fallback LLM provider ([DeepSeek](https://platform.deepseek.com)) |
-| `GROQ_API_KEY_1` | Title generation & question classification ([Groq](https://console.groq.com)) |
-| `KIRAA_API_KEY_1` | Backup LLM provider ([Kira AI](https://kiraai.vn)) |
+### Step2: Get into the folder by using 
+```bash 
+cd <folder_name>
+``` 
+### until you get into the folder with sub folders like backend-main, frontend etc...
 
 ---
 
-### 3. Backend Setup
-
+### Step3: Run the Automated Script:
 ```bash
-cd backend-main
-python -m venv venv
+python setup.py
 ```
-
-**Activate the virtual environment** (pick the one for your shell):
-
-<details open>
-<summary><strong>macOS / Linux / Git Bash</strong></summary>
-
-```bash
-source venv/bin/activate
-```
-</details>
-
-<details>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-</details>
-
-<details>
-<summary><strong>Windows (Command Prompt)</strong></summary>
-
-```cmd
-venv\Scripts\activate.bat
-```
-</details>
-
-Then install dependencies, run migrations, and initialize the RAG pipeline:
-
-```bash
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py initialize_rag
-python manage.py runserver
-```
-
-> Use `python manage.py initialize_rag --force-rebuild` to re-chunk and re-index
-
-Backend runs at **http://localhost:8000**
+### Add all valid inputs the script asks, and you are ready to go!
 
 ---
 
-### 4. Frontend Setup
-
-Open a **new terminal** (keep the backend running in the first one):
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend runs at **http://localhost:5173**
-
----
-
-### 5. Open the App
+### Open the App
 
 Go to **http://localhost:5173**, register an account, select a subject, and start studying. 
 
 ---
 
 ## Environment Variables
-
-Copy `.env.example` to `backend-main/.env` (see Step 2 above) and configure:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -201,6 +105,13 @@ Copy `.env.example` to `backend-main/.env` (see Step 2 above) and configure:
 | `DEBUG` | No | Set to `true` for development (default: `false`) |
 | `ALLOWED_HOSTS` | No | Comma-separated list of allowed hosts (default: `localhost,127.0.0.1`) |
 | `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins (default: `http://localhost:5173`) |
+| `FRONTEND_URL` | No | Frontend origin gateways redirect back to (default: `http://localhost:5173`) |
+| `ESEWA_MODE` | No | `sandbox` (default, public UAT keys) or `production` |
+| `ESEWA_PRODUCT_CODE` | No | eSewa merchant code (defaults to `EPAYTEST` in sandbox) |
+| `ESEWA_SECRET_KEY` | No | eSewa HMAC secret (defaults to the public UAT secret in sandbox) |
+| `KHALTI_MODE` | No | `sandbox` (default) or `production` |
+| `KHALTI_PUBLIC_KEY` | No | Khalti public key (required to enable Khalti checkout) |
+| `KHALTI_SECRET_KEY` | No | Khalti secret key (required to enable Khalti checkout) |
 
 ### Frontend Variables
 
@@ -227,59 +138,6 @@ Firebase variables are legacy and not required for local development.
 | **LLM Providers** | Gemini (primary), DeepSeek (fallback), Kira AI (backup), Groq (titles/classification) |
 | **Caching** | Custom Built Semantic Cache System |
 
----
-
-## File Structure
-
-```
-Noya/
-│
-├── frontend/                          # React + Vite SPA
-│   ├── public/
-│   ├── src/
-│   │   ├── assets/                    # Logo, favicon
-│   │   ├── components/
-│   │   │   ├── ChatView.jsx           # Main chat (SSE streaming, sessions)
-│   │   │   ├── SubjectSelection.jsx   # Grid of subjects + chapters
-│   │   │   ├── Login.jsx              # JWT login form
-│   │   │   ├── SignUp.jsx             # Registration with referral
-│   │   │   ├── MarkdownRenderer.jsx   # KaTeX LaTeX, code blocks, tooltips
-│   │   │   └── FormField.jsx          # Reusable input component
-│   │   ├── context/AuthContext.jsx    # React Context for JWT auth state
-│   │   ├── data/curriculum.js         # CDC subject + chapter definitions
-│   │   ├── services/api.js            # Axios client with JWT interceptor
-│   │   ├── firebase/                  # Firebase config (legacy)
-│   │   ├── styles/                    # Design token CSS
-│   │   ├── tokens.css                 # CSS custom properties
-│   │   ├── index.css                  # Global styles + Tailwind
-│   │   ├── App.jsx                    # Router + AuthProvider
-│   │   └── main.jsx                   # Vite entry point
-│   ├── package.json
-│   └── vite.config.js
-│
-├── backend-main/                      # Django REST API
-│   ├── backend/
-│   │   └── settings.py                # Django config (DB, JWT, CORS, cache)
-│   ├── api/
-│   │   ├── ai_service.py              # LLM orchestration (Gemini/DeepSeek/Kira)
-│   │   ├── rag_service.py             # Qdrant vector search + PDF ingestion
-│   │   ├── semantic_cache.py          # 4-tier semantic caching system
-│   │   ├── chapter_pdf_context.py     # Page-range maps per subject/chapter
-│   │   ├── curriculum_scope.py        # Subject detection + out-of-scope handling
-│   │   ├── content_processor.py       # AI-powered textbook transformation
-│   │   ├── models.py                  # User, ChatSession, ChatMessage, Cache
-│   │   ├── serializers.py             # DRF serializers
-│   │   ├── views.py                   # All API endpoints
-│   │   ├── urls.py                    # Route definitions
-│   │   ├── admin.py                   # Django admin configuration
-│   │   └── apps.py                    # App config + RAG warmup
-│   ├── cdc_curriculum/                # CDC textbook PDFs (class_10/)
-│   ├── manage.py                      # Django management script
-│   └── requirements.txt               # Python dependencies
-│
-├── .env.example                       # Environment variable template
-└── README.md and other docs           # Project Description
-```
 ---
 
 <p align="center">

@@ -2964,3 +2964,376 @@ html.dark .chat-primary-action:hover {
   margin: 0;
 }
 
+
+/* ── Billing: notices, payment modal ───────────────── */
+@keyframes billing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.billing-spin {
+  animation: billing-spin 0.9s linear infinite;
+}
+
+.billing-notice {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  font-size: 0.88rem;
+  gap: 0.6rem;
+  line-height: 1.45;
+  margin: 0 auto 1.5rem;
+  max-width: 640px;
+  padding: 0.8rem 1rem;
+}
+
+.billing-notice span {
+  flex: 1;
+}
+
+.billing-notice.success {
+  background: var(--pine-tint);
+  border-color: color-mix(in srgb, var(--pine) 35%, transparent);
+  color: var(--pine);
+}
+
+.billing-notice.error {
+  background: var(--error-tint);
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+  color: var(--error);
+}
+
+.billing-notice.info {
+  background: var(--brass-tint);
+  border-color: color-mix(in srgb, var(--brass) 35%, transparent);
+  color: var(--brass);
+}
+
+.billing-notice-close {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  opacity: 0.7;
+  padding: 0.15rem;
+}
+
+.billing-notice-close:hover {
+  opacity: 1;
+}
+
+.billing-upgrade-btn:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.billing-modal-overlay {
+  align-items: center;
+  background: rgba(12, 14, 17, 0.55);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1.25rem;
+  position: fixed;
+  z-index: 80;
+}
+
+.billing-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+  max-width: 420px;
+  padding: 1.75rem;
+  position: relative;
+  width: 100%;
+}
+
+.billing-modal-close {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: flex;
+  padding: 0.25rem;
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+}
+
+.billing-modal h3 {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+}
+
+.billing-modal-sub {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  margin: 0 0 1.25rem;
+}
+
+.billing-methods {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.billing-method-btn {
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  gap: 0.8rem;
+  padding: 0.85rem 0.95rem;
+  text-align: left;
+  transition: border-color 140ms var(--ease-out), transform 140ms var(--ease-out);
+  width: 100%;
+}
+
+.billing-method-btn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.billing-method-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.billing-method-icon {
+  align-items: center;
+  border-radius: 10px;
+  display: flex;
+  flex: 0 0 auto;
+  height: 2.4rem;
+  justify-content: center;
+  width: 2.4rem;
+}
+
+.billing-method-icon.esewa {
+  background: #eaf7e4;
+  color: #3f8f2b;
+}
+
+.billing-method-icon.khalti {
+  background: #efe9f9;
+  color: #5c2d91;
+}
+
+.billing-method-icon.stripe {
+  background: #eceaff;
+  color: #635bff;
+}
+
+.billing-method-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.billing-method-text strong {
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.billing-method-text small {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
+.billing-modal-empty {
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  margin: 0;
+  padding: 0.9rem;
+}
+
+.billing-modal-empty code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.billing-modal-note {
+  align-items: flex-start;
+  color: var(--ink-faint);
+  display: flex;
+  font-size: 0.78rem;
+  gap: 0.45rem;
+  line-height: 1.5;
+  margin: 1.15rem 0 0;
+}
+
+.billing-modal-note svg {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 480px) {
+  .billing-modal {
+    padding: 1.35rem;
+  }
+}
+
+/* ── Chat usage limits: popup + persistent banner ──────────── */
+.limit-popup-overlay {
+  align-items: center;
+  background: rgba(12, 14, 17, 0.55);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1.25rem;
+  position: fixed;
+  z-index: 90;
+}
+
+.limit-popup {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  max-width: 380px;
+  padding: 2rem 1.75rem 1.75rem;
+  position: relative;
+  text-align: center;
+  width: 100%;
+}
+
+.limit-popup-close {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  display: flex;
+  padding: 0.25rem;
+  position: absolute;
+  right: 0.85rem;
+  top: 0.85rem;
+}
+
+.limit-popup-close:hover {
+  color: var(--ink);
+}
+
+.limit-popup-icon {
+  align-items: center;
+  background: var(--brass-tint);
+  border-radius: 999px;
+  color: var(--brass);
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  margin: 0 auto 0.9rem;
+  width: 44px;
+}
+
+.limit-popup h3 {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+.limit-popup p {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.limit-popup-upgrade {
+  align-items: center;
+  background: var(--pine);
+  border: none;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-body);
+  font-size: 0.86rem;
+  font-weight: 650;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-top: 1.35rem;
+  padding: 0.7rem 1.4rem;
+  transition: background 160ms var(--ease-out);
+  width: 100%;
+}
+
+.limit-popup-upgrade:hover {
+  background: var(--pine-strong);
+}
+
+.chat-limit-banner {
+  align-items: center;
+  background: var(--brass-tint);
+  border: 1px solid color-mix(in srgb, var(--brass) 35%, transparent);
+  border-radius: 12px;
+  color: var(--ink-soft);
+  display: flex;
+  font-size: 0.8rem;
+  gap: 0.75rem;
+  justify-content: space-between;
+  line-height: 1.5;
+  margin: 0 auto 0.6rem;
+  max-width: 780px;
+  padding: 0.6rem 0.75rem 0.6rem 0.9rem;
+}
+
+.chat-limit-banner.rate {
+  background: var(--error-tint);
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+}
+
+.chat-limit-banner span {
+  flex: 1;
+}
+
+.chat-limit-banner > button:not(.chat-limit-banner-upgrade) {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+  padding: 0.15rem;
+}
+
+.chat-limit-banner-upgrade {
+  align-items: center;
+  background: var(--pine);
+  border: none;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 0.76rem;
+  font-weight: 650;
+  gap: 0.3rem;
+  padding: 0.4rem 0.85rem;
+  transition: background 160ms var(--ease-out);
+}
+
+.chat-limit-banner-upgrade:hover {
+  background: var(--pine-strong);
+}
