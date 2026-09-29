@@ -134,7 +134,7 @@ Firebase variables are legacy and not required for local development.
 | **Authentication** | SimpleJWT (access / refresh tokens with blacklisting) |
 | **Database** | PostgreSQL (Supabase) |
 | **Vector Store** | Qdrant Cloud |
-| **Embedding Model** | `paraphrase-multilingual-MiniLM-L12-v2` (Sentence Transformers) |
+| **Embedding Model** | paraphrase-multilingual-MiniLM-L12-v2 |
 | **LLM Providers** | Gemini (primary), DeepSeek (fallback), Kira AI (backup), Groq (titles/classification) |
 | **Caching** | Custom Built Semantic Cache System |
 
