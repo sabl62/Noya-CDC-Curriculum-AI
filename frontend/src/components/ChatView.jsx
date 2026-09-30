@@ -14,7 +14,6 @@ import {
   Settings,
   UserRound,
   X,
-  Zap,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { API_URL, chatAPI } from "../services/api";
@@ -23,6 +22,9 @@ import { findSubject, SUBJECTS } from "../data/curriculum.js";
 import MarkdownRenderer from "./MarkdownRenderer.jsx";
 import SettingsModal from "./SettingsModal.jsx";
 import noyaLogo from "../assets/noya-logo.svg";
+
+const PRO_CHAT_MODULES = import.meta.glob("../pro/ChatProFeatures.jsx", { eager: true });
+const ProChatFeatures = PRO_CHAT_MODULES["../pro/ChatProFeatures.jsx"];
 
 const quickPrompts = [
   "Explain this simply",
@@ -34,15 +36,32 @@ const quickPrompts = [
 const MODELS = [
   { id: "deepseek-v3", name: "DeepSeek V3", tier: "free" },
   { id: "deepseek-r1", name: "DeepSeek R1", tier: "free" },
-  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", tier: "paid" },
-  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", tier: "paid" },
 ];
 
 const MAX_TEXTAREA_HEIGHT = 164;
 const REQUEST_TIMEOUT_MS = 45000;
 const SESSIONS_CACHE_KEY = "noya_recent_chat_sessions";
 
-const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPending, onSessionCreated, theme = "dark", onToggleTheme }) => {
+const chatErrorMessage = (code, statusCode) => {
+  if (code === "auth_expired" || statusCode === 401) {
+    return "Your session expired. Please sign in again.";
+  }
+  if (code === "model_traffic") {
+    return "The AI models are under heavy traffic right now. Please try again in a little while.";
+  }
+  if (code === "user_api_quota") {
+    return "Your custom API key has run out of available usage. Add credits or use a key with available quota.";
+  }
+  if (code === "ai_timeout") {
+    return "The AI service took too long to respond. Please try again.";
+  }
+  if (statusCode >= 500 || code === "server_failure") {
+    return "Noya's AI service couldn't generate a response right now. Please try again later.";
+  }
+  return "Something went wrong while sending your question. Please try again.";
+};
+
+const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPending, onSessionCreated, theme = "dark", onToggleTheme, billingAvailable = false }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -50,6 +69,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const chapterContext = location.state?.chapter;
   const currentSubject = useMemo(() => findSubject(subjectContext || ""), [subjectContext]);
   const availableChapters = currentSubject?.chapters || [];
+  const proEnabled = Boolean(billingAvailable && ProChatFeatures);
+  const availableModels = proEnabled ? [...MODELS, ...ProChatFeatures.models] : MODELS;
+  const hasProAccess = proEnabled && ProChatFeatures.hasProAccess(user);
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -91,6 +113,13 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const sessionIdRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const dismissedLimitRef = useRef(null);
+
+  useEffect(() => {
+    if (!proEnabled && selectedModel.tier === "paid") {
+      setSelectedModel(MODELS[0]);
+      setModelDropdownOpen(false);
+    }
+  }, [proEnabled, selectedModel]);
 
   useEffect(() => {
     if (!rateNotice) return undefined;
@@ -350,9 +379,21 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         } catch {
           payload = {};
         }
-        const limitType = ["daily", "monthly", "rate"].includes(payload.limit_type)
-          ? payload.limit_type
-          : "daily";
+        const knownLimit = ["daily", "monthly", "rate"].includes(payload.limit_type);
+        if (!knownLimit) {
+          setMessages((previous) =>
+            replaceStreamingMessage(previous, streamingId, {
+              role: "assistant",
+              content: "Noya is receiving too many requests right now. Please wait a moment and try again.",
+              streaming: false,
+              status: null,
+              id: streamingId,
+            })
+          );
+          if (creatingNewSession) onSessionPending?.(false);
+          return;
+        }
+        const limitType = payload.limit_type;
         const info = { limitType, plan: payload.plan || user?.plan_tier || "free" };
 
         // Undo the optimistic turn — the message was not answered.
@@ -372,7 +413,21 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       }
 
       if (!response.ok || !response.body) {
-        throw new Error("Chat request failed");
+        let errorCode = "server_failure";
+        try {
+          const payload = await response.json();
+          errorCode = payload.error_code || errorCode;
+        } catch {
+          // Non-JSON proxy/server errors still receive a safe message below.
+        }
+        if (response.status === 401) {
+          errorCode = "auth_expired";
+          logout();
+          navigate("/login", { replace: true });
+        }
+        const failure = new Error(chatErrorMessage(errorCode, response.status));
+        failure.chatMessage = chatErrorMessage(errorCode, response.status);
+        throw failure;
       }
 
       const reader = response.body.getReader();
@@ -446,7 +501,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
             setMessages((previous) =>
               replaceStreamingMessage(previous, streamingId, {
                 role: "assistant",
-                content: data.message || "Something went wrong. Please try again.",
+                content: chatErrorMessage(data.error_code),
                 streaming: false,
                 status: null,
                 id: streamingId,
@@ -472,7 +527,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           role: "assistant",
           content: timedOut
             ? "This took longer than expected, so I stopped waiting. Try a shorter question or ask again."
-            : "Sorry, I hit a problem generating that answer. Please try again.",
+            : error?.chatMessage || (error instanceof TypeError
+              ? "Noya couldn't reach its servers. Check your connection and try again."
+              : chatErrorMessage("server_failure")),
           streaming: false,
           status: null,
           id: streamingId,
@@ -505,6 +562,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
         user={user}
+        proEnabled={proEnabled}
+        hasProAccess={hasProAccess}
         onLogout={handleLogout}
         onOpenSettings={() => setSettingsOpen(true)}
       />
@@ -564,19 +623,13 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           )}
           {limitBanner && (
             <div className="chat-limit-banner" role="status">
-              <span>
-                You have reached your {limitBanner.limitType} limit on chats.
-                {limitBanner.plan !== "paid" ? " Upgrade to pro for more." : " Please try again when your limit resets."}
-              </span>
-              {limitBanner.plan !== "paid" ? (
-                <button type="button" className="chat-limit-banner-upgrade" onClick={() => navigate("/billing")}>
-                  <Zap size={13} />
-                  <span>Upgrade to Pro</span>
-                </button>
+              {proEnabled && limitBanner.plan !== "paid" ? (
+                <ProChatFeatures.LimitBanner limitType={limitBanner.limitType} onUpgrade={() => navigate("/billing")} />
               ) : (
-                <button type="button" onClick={() => setLimitBanner(null)} aria-label="Dismiss">
-                  <X size={13} />
-                </button>
+                <>
+                  <span>You have reached your {limitBanner.limitType} limit on chats. Please try again when your limit resets.</span>
+                  <button type="button" onClick={() => setLimitBanner(null)} aria-label="Dismiss"><X size={13} /></button>
+                </>
               )}
             </div>
           )}
@@ -613,8 +666,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
               </button>
               {modelDropdownOpen && (
                 <div className={`chat-model-dropdown ${dropdownDir === "up" ? "drop-up" : ""}`}>
-                  {MODELS.map((model) => {
-                    const isDisabled = model.tier === "paid" && user?.plan_tier !== "paid";
+                  {availableModels.map((model) => {
+                    const isDisabled = model.tier === "paid" && !hasProAccess;
                     return (
                       <button
                         key={model.id}
@@ -628,8 +681,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
                         }}
                         disabled={isDisabled}
                       >
-                        <span className="model-option-name">{model.name}</span>
-                        {model.tier === "paid" && <span className="model-option-pro">Pro</span>}
+                        {model.tier === "paid" && proEnabled
+                          ? <ProChatFeatures.ModelOptionLabel model={model} />
+                          : <span className="model-option-name">{model.name}</span>}
                       </button>
                     );
                   })}
@@ -648,12 +702,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           <p className="chat-disclaimer">Answers can make mistakes. Check important facts with your textbook or teacher.</p>
         </footer>
 
-        {user?.plan_tier !== "paid" && (
-          <a href="/billing" className="chat-floating-upgrade">
-            <Zap size={15} />
-            <span>Upgrade to Pro</span>
-          </a>
-        )}
+        {proEnabled && !hasProAccess && <ProChatFeatures.FloatingUpgrade />}
       </main>
       {sourcesPanel && (
         <SourcesPanel
@@ -674,6 +723,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           onClose={() => setSettingsOpen(false)}
           theme={theme}
           onToggleTheme={onToggleTheme}
+          billingAvailable={proEnabled}
         />
       )}
       {limitPopup && (
@@ -695,23 +745,12 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
               {limitPopup.limitType === "monthly" ? "Monthly Limit reached!" : "Daily Limit reached!"}
             </h3>
             <p>
-              You have reached your {limitPopup.limitType} limit on chats.
-              {limitPopup.plan !== "paid"
-                ? " Upgrade to pro for more."
-                : " Please try again when your limit resets."}
+              {proEnabled && limitPopup.plan !== "paid"
+                ? <ProChatFeatures.LimitPopupMessage limitType={limitPopup.limitType} />
+                : `You have reached your ${limitPopup.limitType} limit on chats. Please try again when your limit resets.`}
             </p>
-            {limitPopup.plan !== "paid" ? (
-              <button
-                type="button"
-                className="limit-popup-upgrade"
-                onClick={() => {
-                  dismissLimitPopup();
-                  navigate("/billing");
-                }}
-              >
-                <Zap size={15} />
-                <span>Upgrade to Pro</span>
-              </button>
+            {proEnabled && limitPopup.plan !== "paid" ? (
+              <ProChatFeatures.UpgradeAction onClick={() => { dismissLimitPopup(); navigate("/billing"); }} />
             ) : (
               <button type="button" className="limit-popup-upgrade" onClick={dismissLimitPopup}>
                 Got it
@@ -775,6 +814,8 @@ const Sidebar = ({
   mobileOpen,
   onCloseMobile,
   user,
+  proEnabled,
+  hasProAccess,
   onLogout,
   onOpenSettings,
 }) => {
@@ -966,18 +1007,13 @@ const Sidebar = ({
                   <strong>{user?.username || "Guest"}</strong>
                   <span>{user?.email || ""}</span>
                 </div>
-                <div className="chat-user-popup-plan">
-                  <span className={`plan-badge ${user?.plan_tier === "paid" ? "paid" : "free"}`}>
-                    {user?.plan_tier === "paid" ? "Pro" : "Free"}
-                  </span>
-                </div>
+                {proEnabled && (
+                  <div className="chat-user-popup-plan">
+                    <ProChatFeatures.PlanBadge hasAccess={hasProAccess} />
+                  </div>
+                )}
                 <div className="chat-user-popup-actions">
-                  {user?.plan_tier !== "paid" && (
-                    <a href="/billing" className="chat-popup-btn upgrade">
-                      <Zap size={15} aria-hidden="true" />
-                      <span>Upgrade to Pro</span>
-                    </a>
-                  )}
+                  {proEnabled && !hasProAccess && <ProChatFeatures.UserMenuUpgrade />}
                   <button onClick={() => { setMenuOpen(false); onOpenSettings?.(); }} className="chat-popup-btn">
                     <Settings size={15} aria-hidden="true" />
                     <span>Settings</span>

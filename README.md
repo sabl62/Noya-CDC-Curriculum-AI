@@ -68,11 +68,7 @@ git clone <repo_url>
 ```
 ---
 
-### Step2: Get into the folder by using 
-```bash 
-cd <folder_name>
-``` 
-### until you get into the folder with sub folders like backend-main, frontend etc...
+### Step2: Get into the "Noya/" folder, open it in an IDE.
 
 ---
 
@@ -120,8 +116,6 @@ Create `frontend/.env`:
 ```
 VITE_API_URL=http://localhost:8000
 ```
-
-Firebase variables are legacy and not required for local development.
 
 ---
 

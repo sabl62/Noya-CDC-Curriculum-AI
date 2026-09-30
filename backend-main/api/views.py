@@ -1,11 +1,6 @@
-import hashlib
-import hmac
 import json
+import logging
 import os
-import uuid
-from datetime import datetime, timedelta, timezone as datetime_timezone
-
-import httpx
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -16,9 +11,10 @@ from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.clickjacking import xframe_options_exempt
-from .models import ChatMessage, ChatSession, KnowledgeBaseEntry, Payment, SemanticAnswerCache, CacheLookupEvent
-from .payment_gateways import EsewaGateway, KhaltiGateway, PaymentGatewayError
+from .models import ChatMessage, ChatSession, KnowledgeBaseEntry, SemanticAnswerCache, CacheLookupEvent
 from .usage_limits import UsageLimitExceeded, reserve_chat_request
+from .features import billing_enabled
+from .error_handling import SERVER_FAILURE, user_error_message
 from .serializers import (
     UserSerializer,
     ChatMessageSerializer,
@@ -55,51 +51,7 @@ from .content_processor import (
 
 User = get_user_model()
 ai_service = None
-
-BILLING_PLANS = {
-    'pro': {
-        'id': 'pro',
-        'name': 'Noya Pro',
-        'price': 'Rs. 799 / year',
-        'amount': 799.0,
-        'currency': 'NPR',
-        'interval': 'year',
-        'description': 'Unlimited live RAG answers, priority responses, and a polished pro experience.',
-        'features': [
-            'Unlimited live answers',
-            'Priority grounded responses',
-            'Saved chats and billing support',
-        ],
-        'price_id_env': 'STRIPE_PRICE_ID',
-    }
-}
-
-# One Pro purchase covers a full year of access.
-PRO_PLAN_DURATION_DAYS = 365
-
-
-def _billing_providers():
-    """Payment providers supported by this deployment, with availability flags."""
-    return [
-        {
-            'id': 'esewa',
-            'name': 'eSewa',
-            'enabled': EsewaGateway.is_configured(),
-            'description': 'Pay with your eSewa wallet or eSewa balance.',
-        },
-        {
-            'id': 'khalti',
-            'name': 'Khalti',
-            'enabled': KhaltiGateway.is_configured(),
-            'description': 'Pay with your Khalti wallet.',
-        },
-        {
-            'id': 'stripe',
-            'name': 'Card',
-            'enabled': bool(os.getenv('STRIPE_SECRET_KEY', '').strip()),
-            'description': 'Pay with a credit or debit card.',
-        },
-    ]
+logger = logging.getLogger(__name__)
 
 
 def get_ai_service():
@@ -184,94 +136,16 @@ def _reconcile_session_context(session, context):
     return context
 
 
-def _frontend_base_url(request=None):
-    env_url = os.getenv('FRONTEND_URL', '').rstrip('/')
-    if env_url:
-        return env_url
-    if request is not None:
-        origin = request.headers.get('Origin', '').rstrip('/')
-        if origin:
-            return origin
-    return 'http://localhost:5173'
 
 
-def _stripe_signature_valid(payload: bytes, signature_header: str, secret: str) -> bool:
-    if not secret:
-        return True
-    if not signature_header:
-        return False
-
-    parts = {}
-    for item in signature_header.split(','):
-        key, _, value = item.partition('=')
-        if key and value:
-            parts.setdefault(key, []).append(value)
-
-    timestamp = (parts.get('t') or [''])[0]
-    expected = hmac.new(
-        secret.encode('utf-8'),
-        f'{timestamp}.{payload.decode("utf-8")}'.encode('utf-8'),
-        hashlib.sha256,
-    ).hexdigest()
-    return any(hmac.compare_digest(expected, candidate) for candidate in parts.get('v1', []))
 
 
-def _resolve_billing_user(event_object):
-    metadata = event_object.get('metadata') or {}
-    user_id = metadata.get('user_id') or event_object.get('client_reference_id')
-    if not user_id:
-        return None
-    return User.objects.filter(id=user_id).first()
 
 
-def _set_user_billing_state(user, *, plan_tier=None, provider='', customer_id='', subscription_id='', status_value='', expires_at=None):
-    update_fields = ['billing_provider', 'billing_customer_id', 'billing_subscription_id', 'billing_status']
-    if plan_tier is not None:
-        user.plan_tier = plan_tier
-        update_fields.append('plan_tier')
-    user.billing_provider = provider
-    user.billing_customer_id = customer_id or user.billing_customer_id
-    user.billing_subscription_id = subscription_id or user.billing_subscription_id
-    user.billing_status = status_value or user.billing_status
-    if expires_at is not None:
-        user.billing_expires_at = expires_at
-        update_fields.append('billing_expires_at')
-    user.save(update_fields=list(dict.fromkeys(update_fields)))
 
 
-def _activate_pro_subscription(user, *, provider, reference, payment_id=None):
-    """Grant Pro for one year after a confirmed one-time gateway payment."""
-    _set_user_billing_state(
-        user,
-        plan_tier='paid',
-        provider=provider,
-        customer_id='',
-        subscription_id=reference,
-        status_value='active',
-        expires_at=timezone.now() + timedelta(days=PRO_PLAN_DURATION_DAYS),
-    )
-    return {
-        'plan_tier': user.plan_tier,
-        'billing_provider': user.billing_provider,
-        'billing_status': user.billing_status,
-        'billing_expires_at': user.billing_expires_at,
-    }
 
 
-def _payment_payload(payment, user=None):
-    user = user or payment.user
-    return {
-        'provider': payment.provider,
-        'reference': payment.reference,
-        'status': payment.status,
-        'amount': float(payment.amount),
-        'currency': payment.currency,
-        'plan': payment.plan,
-        'plan_tier': user.plan_tier,
-        'billing_provider': user.billing_provider,
-        'billing_status': user.billing_status,
-        'billing_expires_at': user.billing_expires_at,
-    }
 
 
 # ============ CACHE MANAGEMENT ============
@@ -340,322 +214,14 @@ class CurrentUserView(APIView):
         return Response({'error': 'Not authenticated'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
-class BillingPlansView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def get(self, request):
-        providers = _billing_providers()
-        return Response({
-            'currency': 'NPR',
-            'billing_enabled': any(p['enabled'] for p in providers),
-            'providers': providers,
-            'plans': list(BILLING_PLANS.values()),
-        })
 
 
-class BillingCheckoutView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        plan_id = str(request.data.get('plan', 'pro')).lower()
-        plan = BILLING_PLANS.get(plan_id)
-        if not plan:
-            return Response({'error': 'Unknown billing plan.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        providers = {p['id']: p for p in _billing_providers()}
-        provider = str(request.data.get('provider', '') or '').lower()
-        if not provider:
-            provider = next((pid for pid, p in providers.items() if p['enabled']), '')
-        if not provider or provider not in providers:
-            return Response({'error': 'Unknown payment provider.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not providers[provider]['enabled']:
-            return Response(
-                {'error': f'{providers[provider]["name"]} payments are not configured yet.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        amount = plan['amount']
-        reference = f"NOYA-{request.user.id}-{uuid.uuid4().hex[:16].upper()}"
-        payment = Payment.objects.create(
-            user=request.user,
-            plan=plan_id,
-            provider=provider,
-            amount=amount,
-            currency=plan['currency'],
-            reference=reference,
-            provider_reference=reference,
-            status='initiated',
-        )
-
-        frontend_url = _frontend_base_url(request)
-        # Clean return URLs: the gateways append their own query string (?data= / ?pidx=).
-        return_url = f'{frontend_url}/billing'
-
-        if provider == 'esewa':
-            try:
-                form = EsewaGateway.build_payment_form(
-                    amount=amount,
-                    transaction_uuid=reference,
-                    success_url=return_url,
-                    failure_url=return_url,
-                )
-            except PaymentGatewayError as exc:
-                return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-            return Response({
-                'provider': 'esewa',
-                'checkout_url': form['action'],
-                'form_fields': form['fields'],
-                'method': 'post',
-                'reference': reference,
-                'plan': plan,
-            })
-
-        if provider == 'khalti':
-            try:
-                data = KhaltiGateway.initiate(
-                    amount_paisa=int(round(float(amount) * 100)),
-                    return_url=return_url,
-                    website_url=frontend_url,
-                    purchase_order_id=reference,
-                    purchase_order_name=plan['name'],
-                    customer_info=request.user.email or request.user.username,
-                    product_details=[{'identity': plan_id, 'name': plan['name'], 'total_price': int(round(float(amount) * 100))}],
-                )
-            except PaymentGatewayError as exc:
-                payment.status = 'failed'
-                payment.save(update_fields=['status'])
-                return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-
-            payment.provider_reference = data['pidx']
-            payment.raw_response = data.get('raw', data)
-            payment.status = 'pending'
-            payment.save(update_fields=['provider_reference', 'raw_response', 'status'])
-            return Response({
-                'provider': 'khalti',
-                'checkout_url': data['payment_url'],
-                'method': 'redirect',
-                'reference': data['pidx'],
-                'plan': plan,
-            })
-
-        # Stripe (kept for card payments outside Nepal rails).
-        secret = os.getenv('STRIPE_SECRET_KEY', '').strip()
-        price_id = os.getenv(plan['price_id_env'], '').strip()
-        if not secret or not price_id:
-            payment.delete()
-            return Response({
-                'provider': 'stripe',
-                'checkout_url': None,
-                'status': 'billing_setup_pending',
-                'plan': plan,
-            }, status=status.HTTP_200_OK)
-
-        payload = {
-            'mode': 'subscription',
-            'success_url': f'{frontend_url}/?billing=success',
-            'cancel_url': f'{frontend_url}/pricing?billing=cancel',
-            'client_reference_id': str(request.user.id),
-            'line_items[0][price]': price_id,
-            'line_items[0][quantity]': '1',
-            'metadata[user_id]': str(request.user.id),
-            'metadata[username]': request.user.username,
-            'subscription_data[metadata][user_id]': str(request.user.id),
-            'subscription_data[metadata][username]': request.user.username,
-        }
-        if request.user.email:
-            payload['customer_email'] = request.user.email
-
-        try:
-            response = httpx.post(
-                'https://api.stripe.com/v1/checkout/sessions',
-                data=payload,
-                headers={'Authorization': f'Bearer {secret}'},
-                timeout=20,
-            )
-            response.raise_for_status()
-            data = response.json()
-            payment.provider_reference = str(data.get('id') or '')
-            payment.save(update_fields=['provider_reference'])
-            return Response({
-                'provider': 'stripe',
-                'checkout_url': data.get('url'),
-                'session_id': data.get('id'),
-                'method': 'redirect',
-                'reference': payment.reference,
-                'plan': plan,
-            })
-        except Exception as exc:
-            return Response({'error': f'Billing checkout failed: {exc}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
-class BillingStatusView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        return Response({
-            'plan_tier': getattr(request.user, 'plan_tier', 'free'),
-            'billing_provider': getattr(request.user, 'billing_provider', ''),
-            'billing_status': getattr(request.user, 'billing_status', 'inactive'),
-            'billing_expires_at': getattr(request.user, 'billing_expires_at', None),
-            'payments': [
-                {
-                    'provider': payment.provider,
-                    'plan': payment.plan,
-                    'amount': float(payment.amount),
-                    'currency': payment.currency,
-                    'status': payment.status,
-                    'reference': payment.reference,
-                    'created_at': payment.created_at,
-                }
-                for payment in request.user.payments.all()[:10]
-            ],
-        })
 
 
-class BillingVerifyView(APIView):
-    """Confirm a redirected eSewa/Khalti payment with the gateway, then activate Pro."""
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        provider = str(request.data.get('provider', '') or '').lower()
-        reference = str(request.data.get('reference', '') or '').strip()
-        callback_data = str(request.data.get('data', '') or '').strip()
-
-        if callback_data:
-            # eSewa redirects with a base64 JSON payload containing the transaction_uuid.
-            payload = EsewaGateway.decode_callback(callback_data)
-            provider = provider or 'esewa'
-            reference = str(payload.get('transaction_uuid') or '')
-
-        if not reference:
-            return Response({'error': 'A payment reference is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        payment = (
-            Payment.objects
-            .filter(user=request.user)
-            .filter(provider_reference=reference)
-            .first()
-            or Payment.objects
-            .filter(user=request.user)
-            .filter(reference=reference)
-            .first()
-        )
-        if not payment:
-            return Response({'error': 'No matching payment found.'}, status=status.HTTP_404_NOT_FOUND)
-        if provider and provider != payment.provider:
-            return Response({'error': 'Payment provider mismatch.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if payment.status == 'completed':
-            return Response(_payment_payload(payment))
-
-        if payment.provider == 'stripe':
-            # Stripe is confirmed asynchronously by the webhook handler.
-            return Response(_payment_payload(payment))
-
-        try:
-            if payment.provider == 'esewa':
-                result = EsewaGateway.check_status(
-                    transaction_uuid=payment.provider_reference or payment.reference,
-                    total_amount=payment.amount,
-                )
-                status_map = {
-                    'COMPLETE': 'completed',
-                    'PENDING': 'pending',
-                    'CANCELED': 'failed',
-                    'FAILED': 'failed',
-                    'FULL_REFUND': 'refunded',
-                    'FULL_REFUNDED': 'refunded',
-                }
-                new_status = status_map.get(result['status'], 'pending')
-                gateway_amount = result['raw'].get('total_amount')
-                amount_ok = (
-                    gateway_amount is None
-                    or abs(float(gateway_amount) - float(payment.amount)) < 0.01
-                )
-                transaction_id = result.get('ref_id', '')
-            elif payment.provider == 'khalti':
-                result = KhaltiGateway.lookup(payment.provider_reference or payment.reference)
-                new_status = result['status']
-                gateway_amount = result.get('total_amount')
-                amount_ok = (
-                    gateway_amount is None
-                    or int(gateway_amount) == int(round(float(payment.amount) * 100))
-                )
-                transaction_id = result.get('transaction_id', '')
-            else:
-                return Response({'error': 'Unsupported payment provider.'}, status=status.HTTP_400_BAD_REQUEST)
-        except PaymentGatewayError as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-
-        if new_status == 'completed' and not amount_ok:
-            new_status = 'failed'
-
-        payment.status = new_status
-        if transaction_id:
-            payment.provider_transaction_id = transaction_id
-        payment.raw_response = result.get('raw', result)
-        payment.save(update_fields=['status', 'provider_transaction_id', 'raw_response'])
-
-        if new_status == 'completed':
-            _activate_pro_subscription(
-                payment.user,
-                provider=payment.provider,
-                reference=payment.provider_reference or payment.reference,
-            )
-            request.user = payment.user
-
-        return Response(_payment_payload(payment))
 
 
-class BillingWebhookView(APIView):
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []
-
-    def post(self, request):
-        secret = os.getenv('STRIPE_WEBHOOK_SECRET', '').strip()
-        raw_body = request.body or b''
-        signature = request.headers.get('Stripe-Signature', '')
-
-        if secret and not _stripe_signature_valid(raw_body, signature, secret):
-            return Response({'error': 'Invalid signature'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            event = json.loads(raw_body.decode('utf-8'))
-        except Exception:
-            return Response({'error': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
-
-        event_type = event.get('type', '')
-        event_object = (event.get('data') or {}).get('object') or {}
-        user = _resolve_billing_user(event_object)
-
-        if not user:
-            return Response({'received': True, 'ignored': True})
-
-        if event_type in {'checkout.session.completed', 'customer.subscription.created', 'customer.subscription.updated'}:
-            subscription_status = str(event_object.get('status') or 'active').lower()
-            expires_at = event_object.get('current_period_end')
-            expires_at_value = datetime.fromtimestamp(expires_at, tz=datetime_timezone.utc) if expires_at else None
-            _set_user_billing_state(
-                user,
-                plan_tier='paid' if subscription_status in {'active', 'trialing'} else 'free',
-                provider='stripe',
-                customer_id=str(event_object.get('customer') or ''),
-                subscription_id=str(event_object.get('subscription') or event_object.get('id') or ''),
-                status_value=subscription_status,
-                expires_at=expires_at_value,
-            )
-        elif event_type in {'customer.subscription.deleted', 'invoice.payment_failed'}:
-            _set_user_billing_state(
-                user,
-                plan_tier='free',
-                provider='stripe',
-                customer_id=str(event_object.get('customer') or ''),
-                subscription_id=str(event_object.get('id') or ''),
-                status_value='inactive',
-            )
-
-        return Response({'received': True})
 
 # ============ CHAT/AI VIEWS ============
 
@@ -807,13 +373,11 @@ class ChatView(APIView):
                         yield f"data: {json.dumps(event)}\n\n"
 
                 if not final_event:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'No response generated'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'error_code': SERVER_FAILURE, 'message': user_error_message(SERVER_FAILURE)})}\n\n"
 
             except Exception as e:
-                import traceback
-                with open("error.log", "w") as f:
-                    f.write(traceback.format_exc())
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                logger.error("Unhandled chat stream error (%s)", type(e).__name__)
+                yield f"data: {json.dumps({'type': 'error', 'error_code': SERVER_FAILURE, 'message': user_error_message(SERVER_FAILURE)})}\n\n"
 
         response = StreamingHttpResponse(
             event_stream(),
@@ -830,7 +394,7 @@ class CacheInspectView(APIView):
     def post(self, request):
         message = request.data.get('message', '')
         context = request.data.get('context', {})
-        plan_tier = getattr(request.user, 'plan_tier', 'free')
+        plan_tier = getattr(request.user, 'plan_tier', 'free') if billing_enabled() else 'free'
         decision = get_semantic_cache_service().inspect(
             message,
             context=context,
@@ -1139,7 +703,7 @@ class ReferralInfoView(APIView):
         return Response({
             'referral_code': request.user.referral_code or '',
             'referral_count': referral_count,
-            'referral_url': f"{_frontend_base_url(request)}/signup?ref={request.user.referral_code}" if request.user.referral_code else '',
+            'referral_url': f"{os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')}/signup?ref={request.user.referral_code}" if request.user.referral_code else '',
         })
 
 
@@ -1155,5 +719,5 @@ class UsageStatsView(APIView):
             'total_messages': total_messages,
             'total_sessions': total_sessions,
             'today_messages': today_messages,
-            'plan_tier': request.user.plan_tier,
+            'plan_tier': request.user.plan_tier if billing_enabled() else 'free',
         })

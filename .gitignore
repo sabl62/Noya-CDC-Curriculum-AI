@@ -55,3 +55,10 @@ files.zip
 
 todo.md
 PRODUCT.md
+backend-main/api/pro_admin.py
+backend-main/api/pro_ai.py
+backend-main/api/pro_models.py
+backend-main/api/pro_usage.py
+backend-main/api/billing.py
+
+frontend/src/pro

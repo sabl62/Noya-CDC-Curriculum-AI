@@ -1,24 +1,39 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import ChatMessage, ChatSession, KnowledgeBaseEntry, SemanticAnswerCache, CacheLookupEvent
+from .features import billing_enabled
 
 User = get_user_model()
+BILLING_USER_FIELDS = []
+for field_name in ("billing_provider", "billing_customer_id", "billing_subscription_id", "billing_status", "billing_expires_at"):
+    try:
+        User._meta.get_field(field_name)
+        BILLING_USER_FIELDS.append(field_name)
+    except Exception:
+        pass
 
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
     referral_code = serializers.CharField(read_only=True)
+    billing_enabled = serializers.SerializerMethodField()
+    plan_tier = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'password', 'first_name', 'last_name', 'bio', 
-                  'grade', 'school', 'plan_tier', 'billing_provider', 'billing_customer_id',
-                  'billing_subscription_id', 'billing_status', 'billing_expires_at',
-                  'profile_image', 'referral_code', 'created_at']
+                  'grade', 'school', 'plan_tier', *BILLING_USER_FIELDS,
+                  'profile_image', 'referral_code', 'created_at', 'billing_enabled']
         read_only_fields = [
             'id', 'created_at', 'plan_tier', 'billing_provider', 'billing_customer_id',
             'billing_subscription_id', 'billing_status', 'billing_expires_at', 'referral_code',
         ]
+
+    def get_billing_enabled(self, obj):
+        return billing_enabled()
+
+    def get_plan_tier(self, obj):
+        return getattr(obj, 'plan_tier', 'free') if billing_enabled() else 'free'
     
     def create(self, validated_data):
         password = validated_data.pop('password', None)

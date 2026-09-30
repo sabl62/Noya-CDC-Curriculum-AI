@@ -32,6 +32,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import UsageCounter
+from .features import billing_enabled
 
 DAILY_RESET = timedelta(hours=24)
 MONTHLY_RESET = timedelta(days=30)
@@ -39,10 +40,7 @@ RATE_RESET = timedelta(minutes=1)
 
 _PERIODS = (('daily', DAILY_RESET), ('monthly', MONTHLY_RESET))
 
-DEFAULT_LIMITS = {
-    'free': {'daily': 15, 'monthly': 300},
-    'paid': {'daily': 150, 'monthly': 1000},
-}
+FREE_LIMITS = {'daily': 15, 'monthly': 300}
 DEFAULT_RATE_LIMIT = 5
 
 
@@ -78,16 +76,25 @@ def _int_env(name: str, default: int) -> int:
 
 
 def normalize_plan(plan_tier) -> str:
+    if not billing_enabled():
+        return 'free'
     return 'paid' if str(plan_tier or 'free').strip().lower() == 'paid' else 'free'
 
 
 def plan_limits(plan_tier) -> dict:
     plan = normalize_plan(plan_tier)
-    defaults = DEFAULT_LIMITS[plan]
+    if plan == 'paid':
+        from .pro_usage import plan_limits as pro_plan_limits
+        defaults = pro_plan_limits(_int_env)
+    else:
+        defaults = {
+            'daily': _int_env('USAGE_FREE_DAILY_LIMIT', FREE_LIMITS['daily']),
+            'monthly': _int_env('USAGE_FREE_MONTHLY_LIMIT', FREE_LIMITS['monthly']),
+        }
     return {
         'plan': plan,
-        'daily': _int_env(f'USAGE_{plan.upper()}_DAILY_LIMIT', defaults['daily']),
-        'monthly': _int_env(f'USAGE_{plan.upper()}_MONTHLY_LIMIT', defaults['monthly']),
+        'daily': defaults['daily'],
+        'monthly': defaults['monthly'],
     }
 
 

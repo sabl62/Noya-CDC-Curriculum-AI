@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { getFriendlyApiError } from "../services/errors.js";
 import FormField from "./FormField";
 import noyaLogo from "../assets/noya-logo.svg";
 
@@ -40,7 +41,7 @@ const SignUp = () => {
       await signup(formData.username, formData.email, formData.password, formData.referralCode);
       navigate("/");
     } catch (err) {
-      setError(err.message || "We couldn't create your account. Please try again.");
+      setError(getFriendlyApiError(err, { fallback: "We couldn't create your account. Please try again." }));
       setLoading(false);
     }
   };

@@ -27,10 +27,19 @@ import ChatView from "./components/ChatView.jsx";
 import SubjectSelection from "./components/SubjectSelection.jsx";
 import Login from "./components/Login.jsx";
 import Signup from "./components/SignUp.jsx";
-import BillingPage from "./components/BillingPage.jsx";
 import { useAuth, AuthProvider } from "./context/AuthContext.jsx";
 import { authAPI } from "./services/api";
 import noyaLogo from "./assets/noya-logo.svg";
+
+// Vite includes whichever optional Pro UI modules are present in the build.
+// An empty glob keeps the base app buildable when billing UI is removed.
+const PRO_UI_MODULES = import.meta.glob("./pro/{BillingPage,ChatProFeatures,SettingsPro}.jsx", { eager: true });
+const BillingPage = PRO_UI_MODULES["./pro/BillingPage.jsx"]?.default || null;
+const proUiAvailable = Boolean(
+  BillingPage &&
+  PRO_UI_MODULES["./pro/ChatProFeatures.jsx"] &&
+  PRO_UI_MODULES["./pro/SettingsPro.jsx"]
+);
 
 const ProtectedRoute = ({ children }) => {
   const { isLoggedIn, loading } = useAuth();
@@ -296,7 +305,8 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
 );
 
 function AppContent() {
-  const { isLoggedIn, logout, loading, setIsLoggedIn, setUser } = useAuth();
+  const { user, isLoggedIn, logout, loading, setIsLoggedIn, setUser } = useAuth();
+  const billingAvailable = Boolean(proUiAvailable && user?.billing_enabled);
   const [isValidating, setIsValidating] = useState(true);
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "dark";
@@ -396,19 +406,22 @@ function AppContent() {
                   onSessionCreated={handleSessionCreated}
                   theme={theme}
                   onToggleTheme={toggleTheme}
+                  billingAvailable={billingAvailable}
                 />
               </ProtectedRoute>
             }
           />
           <Route path="/pricing" element={<Navigate to="/" replace />} />
-          <Route
-            path="/billing"
-            element={
-              <ProtectedRoute>
-                <BillingPage theme={theme} onToggleTheme={toggleTheme} />
-              </ProtectedRoute>
-            }
-          />
+          {billingAvailable && (
+            <Route
+              path="/billing"
+              element={
+                <ProtectedRoute>
+                  <BillingPage theme={theme} onToggleTheme={toggleTheme} />
+                </ProtectedRoute>
+              }
+            />
+          )}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

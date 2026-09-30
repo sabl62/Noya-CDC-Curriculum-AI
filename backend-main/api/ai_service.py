@@ -3,6 +3,7 @@ AI Service for Noya AI with RAG Integration + Real Streaming
 """
 
 import json
+import logging
 import os
 import re
 from typing import Dict, Any, Generator
@@ -46,6 +47,13 @@ from .semantic_cache import (
     get_semantic_cache_service,
 )
 from .models import ChatMessage, KnowledgeBaseEntry
+from .features import billing_enabled
+from .error_handling import (
+    SERVER_FAILURE,
+    classify_provider_error,
+    classify_provider_failures,
+    user_error_message,
+)
 
 
 _STOPWORDS = {
@@ -61,7 +69,6 @@ _STUDY_TERMS = {
 }
 
 _GEMINI_FREE_MODEL = "gemini-2.5-flash"
-_GEMINI_PAID_MODEL = "gemini-2.5-pro"
 
 _INVALID_RESPONSE_MARKERS = [
     "name '", "is not defined", "traceback", "syntaxerror",
@@ -148,7 +155,36 @@ _CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
 _KIRA_ENDPOINT = "https://kiraai.vn/api/v1"
 _KIRA_MODEL_FREE = "deepseek-v4-flash-free"
-_KIRA_MODEL_PAID = "deepseek-v4-flash"
+
+
+def _model_for(provider, plan_tier, free_model):
+    if not billing_enabled() or str(plan_tier or "free").lower() != "paid":
+        return free_model
+    try:
+        from .pro_ai import model_for
+        return model_for(provider, plan_tier, free_model)
+    except ImportError:
+        return free_model
+
+
+def _retry_plan_tier(plan_tier):
+    if not billing_enabled():
+        return "free"
+    try:
+        from .pro_ai import retry_plan
+        return retry_plan(plan_tier)
+    except ImportError:
+        return "free"
+
+logger = logging.getLogger(__name__)
+
+
+class AIProviderFailure(Exception):
+    """Provider fallback ended without an answer; contains only a safe code."""
+
+    def __init__(self, code=SERVER_FAILURE):
+        self.code = code
+        super().__init__(code)
 
 
 class AIService:
@@ -366,8 +402,6 @@ class AIService:
                 },
                 content=json.dumps(payload),
             )
-            if resp.status_code == 429:
-                raise Exception("Rate limited")
             resp.raise_for_status()
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -398,8 +432,6 @@ class AIService:
                 },
                 content=json.dumps(payload),
             )
-            if resp.status_code == 429:
-                raise Exception("Cerebras rate limited")
             resp.raise_for_status()
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -440,8 +472,6 @@ class AIService:
                 },
                 content=json.dumps(payload),
             )
-            if resp.status_code == 429:
-                raise Exception("Groq rate limited")
             resp.raise_for_status()
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -472,8 +502,6 @@ class AIService:
                 },
                 content=json.dumps(payload),
             )
-            if resp.status_code == 429:
-                raise Exception("Kira rate limited")
             resp.raise_for_status()
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -545,7 +573,7 @@ Rules:
         self, prompt: str, system_prompt: str, max_output_tokens: int,
         timeout: int, plan_tier: str, errors: list
     ) -> str:
-        primary = _GEMINI_FREE_MODEL if plan_tier == "free" else _GEMINI_PAID_MODEL
+        primary = _model_for("gemini", plan_tier, _GEMINI_FREE_MODEL)
         models_to_try = [primary] + [m for m in _GEMINI_FALLBACK_MODELS if m != primary]
         for model in models_to_try:
             for idx, client in enumerate(self.gemini_clients, start=1):
@@ -556,10 +584,9 @@ Rules:
                     if "404" in err_msg or "not found" in err_msg:
                         # Model deprecated, try next model
                         break
-                    if any(w in err_msg for w in ("quota", "429", "rate", "limit", "resource exhausted")):
-                        errors.append(f"Gemini {model} key {idx} exhausted: {e}")
-                    else:
-                        errors.append(f"Gemini {model} key {idx} error: {e}")
+                    category = classify_provider_error(e)
+                    errors.append({"category": category})
+                    logger.warning("Gemini generation failed for %s key slot %s (category=%s)", model, idx, category)
         return ""
 
     def _try_deepseek(
@@ -568,16 +595,14 @@ Rules:
     ) -> str:
         if not self.deepseek_keys:
             return ""
-        model = _DEEPSEEK_MODEL if plan_tier == "free" else "deepseek-v4-flash"
+        model = _model_for("deepseek", plan_tier, _DEEPSEEK_MODEL)
         for idx, key in enumerate(self.deepseek_keys, start=1):
             try:
                 return self._call_deepseek(key, model, prompt, system_prompt, max_output_tokens, timeout)
             except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "rate" in err_msg:
-                    errors.append(f"DeepSeek {model} key {idx} exhausted: {e}")
-                else:
-                    errors.append(f"DeepSeek {model} key {idx} error: {e}")
+                category = classify_provider_error(e)
+                errors.append({"category": category})
+                logger.warning("DeepSeek generation failed for %s key slot %s (category=%s)", model, idx, category)
         return ""
 
     def _try_kira(
@@ -586,16 +611,14 @@ Rules:
     ) -> str:
         if not self.kira_keys:
             return ""
-        model = _KIRA_MODEL_PAID if plan_tier == "paid" else _KIRA_MODEL_FREE
+        model = _model_for("kira", plan_tier, _KIRA_MODEL_FREE)
         for idx, key in enumerate(self.kira_keys, start=1):
             try:
                 return self._call_kira(key, model, prompt, system_prompt, max_output_tokens, timeout)
             except Exception as e:
-                err_msg = str(e).lower()
-                if "429" in err_msg or "rate" in err_msg:
-                    errors.append(f"Kira {model} key {idx} exhausted: {e}")
-                else:
-                    errors.append(f"Kira {model} key {idx} error: {e}")
+                category = classify_provider_error(e)
+                errors.append({"category": category})
+                logger.warning("Kira generation failed for %s key slot %s (category=%s)", model, idx, category)
         return ""
 
     def _generate(
@@ -637,7 +660,7 @@ Rules:
             if result:
                 return result
 
-        raise Exception("All providers exhausted: " + " | ".join(errors))
+        raise AIProviderFailure(classify_provider_failures(errors))
 
     def generate_title(self, user_message: str) -> str:
         """Generate a short, specific title via Kira/Groq (fast/cheap), fallback to heuristic."""
@@ -708,6 +731,8 @@ Rules:
         grade = str(context.get("grade", "10"))
         chapter_title = context.get("chapter", "")
         plan_tier = str(getattr(user, "plan_tier", "free") or "free").lower()
+        if not billing_enabled():
+            plan_tier = "free"
         cache_service = get_semantic_cache_service()
 
         out_of_scope_response = out_of_scope_response_for_subject(subject)
@@ -823,7 +848,7 @@ INSTRUCTIONS:
                             system_prompt,
                             max_output_tokens=8192,
                             timeout=60,
-                            plan_tier="paid" if plan_tier == "free" else "free",
+                            plan_tier=_retry_plan_tier(plan_tier),
                         )
                     yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
                     cache_service.learn_from_ai(
@@ -831,13 +856,20 @@ INSTRUCTIONS:
                         answer=response.rstrip(),
                         context=context,
                         source=f"CDC Textbook — {subject.title()} — {chapter_title}",
-                        model=_GEMINI_PAID_MODEL if plan_tier == "paid" else _GEMINI_FREE_MODEL,
+                        model=_model_for("gemini", plan_tier, _GEMINI_FREE_MODEL),
                     )
                     yield {"type": "complete", "response": response, "source": f"CDC Textbook — {subject.title()} — {chapter_title}"}
                     return
                 except Exception as e:
-                    print(f"[AI] Provider failed (chapter path): {e}")
-                    yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error", "ai_failed": True}
+                    error_code = getattr(e, "code", classify_provider_error(e))
+                    logger.error("AI generation failed on the chapter path (category=%s, error=%s)", error_code, type(e).__name__)
+                    yield {
+                        "type": "complete",
+                        "response": user_error_message(error_code),
+                        "source": "Error",
+                        "ai_failed": True,
+                        "error_code": error_code,
+                    }
                     return
 
         # ─── FALLBACK PATH: Cache → RAG → AI ───
@@ -921,7 +953,7 @@ INSTRUCTIONS:
                     system_prompt,
                     max_output_tokens=2048,
                     timeout=30,
-                    plan_tier="paid" if plan_tier == "free" else "free",
+                    plan_tier=_retry_plan_tier(plan_tier),
                 )
             yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
             cache_service.learn_from_ai(
@@ -929,12 +961,19 @@ INSTRUCTIONS:
                 answer=response,
                 context=context,
                 source=source_info or "AI Generated",
-                model=_GEMINI_PAID_MODEL if plan_tier == "paid" else _GEMINI_FREE_MODEL,
+                model=_model_for("gemini", plan_tier, _GEMINI_FREE_MODEL),
             )
             yield {"type": "complete", "response": response, "source": source_info if source_info else "General Knowledge"}
         except Exception as e:
-            print(f"[AI] Provider failed: {e}")
-            yield {"type": "complete", "response": "The AI service is currently unavailable. Please try again in a few minutes.", "source": "Error", "ai_failed": True}
+            error_code = getattr(e, "code", classify_provider_error(e))
+            logger.error("AI generation failed on the retrieval path (category=%s, error=%s)", error_code, type(e).__name__)
+            yield {
+                "type": "complete",
+                "response": user_error_message(error_code),
+                "source": "Error",
+                "ai_failed": True,
+                "error_code": error_code,
+            }
 
     def get_rag_status(self) -> Dict:
         if not getattr(self, 'rag_service', None):

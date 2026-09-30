@@ -7,7 +7,7 @@ const normalizeApiUrl = (value) => {
 
 export const API_URL = normalizeApiUrl(import.meta.env.VITE_API_URL);
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: API_URL,
   headers: {
     'Content-Type': 'application/json',
@@ -102,15 +102,6 @@ export const profileAPI = {
   getMe: () => api.get('/auth/user/'),
   update: (data) => api.patch('/auth/user/', data),
 };
-
-export const billingAPI = {
-  getPlans: () => api.get('/billing/plans/').then((res) => res.data),
-  getStatus: () => api.get('/billing/status/').then((res) => res.data),
-  createCheckoutSession: (plan = 'pro', provider = '') =>
-    api.post('/billing/checkout/', { plan, provider }).then((res) => res.data),
-  verifyPayment: (payload = {}) => api.post('/billing/verify/', payload).then((res) => res.data),
-};
-
 
 // AI Chat API
 export const chatAPI = {

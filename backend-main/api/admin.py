@@ -1,12 +1,12 @@
 from django.contrib import admin
 
-from .models import CacheLookupEvent, ChatMessage, ChatSession, KnowledgeBaseEntry, Payment, SemanticAnswerCache, UsageCounter, User
+from .models import CacheLookupEvent, ChatMessage, ChatSession, KnowledgeBaseEntry, SemanticAnswerCache, UsageCounter, User
 
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ("username", "email", "plan_tier", "grade", "is_staff", "date_joined")
-    list_filter = ("plan_tier", "is_staff", "is_active")
+    list_display = ("username", "email", "grade", "is_staff", "date_joined")
+    list_filter = ("is_staff", "is_active")
     search_fields = ("username", "email", "first_name", "last_name")
 
 
@@ -44,20 +44,18 @@ class CacheLookupEventAdmin(admin.ModelAdmin):
     search_fields = ("message", "normalized_query")
 
 
-@admin.register(Payment)
-class PaymentAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "provider", "plan", "amount", "currency", "status", "reference", "created_at")
-    list_filter = ("provider", "status", "plan")
-    search_fields = ("reference", "provider_reference", "provider_transaction_id", "user__username")
-    readonly_fields = ("raw_response", "created_at", "updated_at")
-
-
 @admin.register(UsageCounter)
 class UsageCounterAdmin(admin.ModelAdmin):
     list_display = (
         "key", "user", "daily_count", "daily_limit_reached_at",
         "monthly_count", "monthly_limit_reached_at", "minute_count", "updated_at",
     )
+
+
+try:
+    from . import pro_admin
+except ImportError:
+    pro_admin = None
     list_filter = ("daily_limit_reached_at", "monthly_limit_reached_at")
     search_fields = ("key", "user__username")
     readonly_fields = ("key", "user", "created_at", "updated_at")

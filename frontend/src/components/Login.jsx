@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { getFriendlyApiError } from "../services/errors.js";
 import FormField from "./FormField";
 import noyaLogo from "../assets/noya-logo.svg";
 
@@ -22,8 +23,10 @@ const Login = () => {
       await login(formData.username, formData.password);
       navigate("/");
     } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || "We couldn't sign you in. Check your username and password.";
-      setError(msg);
+      setError(getFriendlyApiError(err, {
+        fallback: "We couldn't sign you in. Check your username and password.",
+        unauthorized: "Username or password is incorrect.",
+      }));
       setLoading(false);
     }
   };

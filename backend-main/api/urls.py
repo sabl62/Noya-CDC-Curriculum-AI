@@ -9,11 +9,6 @@ from .views import (
     RegisterView,
     LogoutView,
     CurrentUserView,
-    BillingPlansView,
-    BillingCheckoutView,
-    BillingStatusView,
-    BillingVerifyView,
-    BillingWebhookView,
     ChatView,
     ChatHistoryView,
     ChatSessionView,
@@ -47,13 +42,6 @@ urlpatterns = [
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/user/', CurrentUserView.as_view(), name='current_user'),
 
-    # Billing
-    path('billing/plans/', BillingPlansView.as_view(), name='billing_plans'),
-    path('billing/checkout/', BillingCheckoutView.as_view(), name='billing_checkout'),
-    path('billing/status/', BillingStatusView.as_view(), name='billing_status'),
-    path('billing/verify/', BillingVerifyView.as_view(), name='billing_verify'),
-    path('billing/webhook/', BillingWebhookView.as_view(), name='billing_webhook'),
-    
     # SIKSYA AI Chat
     path('chat/', ChatView.as_view(), name='chat'),
     path('chat/history/', ChatHistoryView.as_view(), name='chat_history'),
@@ -88,3 +76,14 @@ urlpatterns = [
     path('cache/metrics/', CacheMetricsView.as_view(), name='cache_metrics'),
     path('cache/process-content/', ContentProcessorView.as_view(), name='cache_process_content'),
 ]
+
+# Billing is optional. Keep all billing URLs out of the core API unless both
+# the server logic and frontend Pro UI are included in the project.
+from .features import billing_enabled
+
+if billing_enabled():
+    from .billing import urlpatterns as billing_urlpatterns
+else:
+    billing_urlpatterns = []
+
+urlpatterns += billing_urlpatterns

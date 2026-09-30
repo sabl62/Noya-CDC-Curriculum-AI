@@ -2,22 +2,19 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings
 
-class User(AbstractUser):
-    """Custom User model with additional fields"""
-    PLAN_CHOICES = [
-        ('free', 'Free'),
-        ('paid', 'Paid'),
-    ]
+try:
+    from .pro_models import BillingFields, Payment
+except ImportError:
+    class BillingFields(models.Model):
+        class Meta:
+            abstract = True
 
+
+class User(BillingFields, AbstractUser):
+    """Custom User model with additional fields"""
     bio = models.TextField(blank=True)
     grade = models.CharField(max_length=10, blank=True)
     school = models.CharField(max_length=200, blank=True)
-    plan_tier = models.CharField(max_length=20, choices=PLAN_CHOICES, default='free')
-    billing_provider = models.CharField(max_length=40, blank=True, default='')
-    billing_customer_id = models.CharField(max_length=128, blank=True, default='', db_index=True)
-    billing_subscription_id = models.CharField(max_length=128, blank=True, default='', db_index=True)
-    billing_status = models.CharField(max_length=32, blank=True, default='inactive', db_index=True)
-    billing_expires_at = models.DateTimeField(null=True, blank=True)
     profile_image = models.ImageField(upload_to='profiles/', blank=True, null=True)
     referral_code = models.CharField(max_length=20, blank=True, default='', db_index=True)
     referred_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals')
@@ -44,57 +41,6 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.username
-
-class Payment(models.Model):
-    """A single plan checkout attempt through a payment gateway."""
-    PROVIDER_CHOICES = [
-        ('esewa', 'eSewa'),
-        ('khalti', 'Khalti'),
-        ('stripe', 'Stripe'),
-    ]
-    STATUS_CHOICES = [
-        ('initiated', 'Initiated'),
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-        ('expired', 'Expired'),
-        ('refunded', 'Refunded'),
-    ]
-
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='payments',
-    )
-    plan = models.CharField(max_length=20, default='pro')
-    provider = models.CharField(max_length=20, choices=PROVIDER_CHOICES, db_index=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=10, default='NPR')
-    reference = models.CharField(
-        max_length=64,
-        unique=True,
-        db_index=True,
-        help_text="Merchant order id generated at checkout.",
-    )
-    provider_reference = models.CharField(
-        max_length=128,
-        blank=True,
-        default='',
-        db_index=True,
-        help_text="Gateway handle used for verification (eSewa transaction_uuid / Khalti pidx).",
-    )
-    provider_transaction_id = models.CharField(max_length=128, blank=True, default='')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='initiated', db_index=True)
-    raw_response = models.JSONField(default=dict, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ['-created_at']
-
-    def __str__(self):
-        return f"{self.provider}:{self.reference} ({self.status})"
-
 
 class UsageCounter(models.Model):
     """Rolling chat quotas (daily/monthly) and per-minute rate limit.
