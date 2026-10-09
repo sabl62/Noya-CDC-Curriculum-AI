@@ -2,8 +2,6 @@
 
 Noya is a Grade 10 study chat application for Nepal's CDC curriculum. The web client is built with React and Vite; the API and application data are handled by Django REST Framework.
 
-The repository contains curriculum lookup code, but this checkout does **not** contain the `backend-main/api/cdc_curriculum/` PDF directory. Textbook-grounded responses therefore require you to provide the relevant PDFs and configure Qdrant. Without those resources, the app can start, but its curriculum retrieval features are not ready to use.
-
 ## What is implemented
 
 - The subject picker currently exposes Science, Mathematics, Optional Mathematics, and English.
