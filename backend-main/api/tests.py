@@ -1,7 +1,8 @@
 from django.test import TestCase
 
 from .models import ChatMessage, ChatSession, KnowledgeBaseEntry, User
-from .views import _reconcile_session_context
+from .views import _reconcile_session_context, is_placeholder_session_title
+from .ai_service import _clean_title, _heuristic_title, _is_model_unavailable_error
 from .semantic_cache import (
     DECISION_AI_REQUIRED,
     DECISION_CACHE_HIT,
@@ -308,3 +309,107 @@ class FingerprintAndLRURefTests(TestCase):
         # Correct ref — must hit
         hit = cache.get(scope, "solved_exercise", "solve exercise 7 3 question 2", exercise_ref="7.3#2")
         self.assertEqual(hit[0], "answer 7.3")
+
+
+class PlaceholderSessionTitleTests(TestCase):
+    """Sessions are seeded with the subject's display name; every spelling of
+    every subject must still be recognised as "not titled yet"."""
+
+    def test_blank_and_default_titles_are_placeholders(self):
+        for value in ["", "   ", "New Chat", "Untitled", "untitled chat"]:
+            with self.subTest(value=value):
+                self.assertTrue(is_placeholder_session_title(value))
+
+    def test_every_subject_display_name_is_a_placeholder(self):
+        # "Optional Mathematics" was missing from the old hardcoded list, so
+        # those chats were never given a generated title.
+        for value in [
+            "Science",
+            "science",
+            "Mathematics",
+            "math",
+            "Optional Mathematics",
+            "Optional Math",
+            "omaths",
+            "English",
+            "Social Studies",
+            "social",
+        ]:
+            with self.subTest(value=value):
+                self.assertTrue(is_placeholder_session_title(value))
+
+    def test_generated_titles_are_not_placeholders(self):
+        for value in [
+            "Photosynthesis",
+            "Photosynthesis Process",
+            "Quadratic Equations Exercise",
+            "Respiration Process",
+            "Transformers",
+            "English Grammar",
+            "exercise 7.1",
+        ]:
+            with self.subTest(value=value):
+                self.assertFalse(is_placeholder_session_title(value))
+
+
+class CleanTitleTests(TestCase):
+    def test_strips_quotes_prefix_and_markdown(self):
+        self.assertEqual(_clean_title('  "Photosynthesis Explained Simply"  '), "Photosynthesis Explained Simply")
+        self.assertEqual(_clean_title("Title: Compound Interest Formula"), "Compound Interest Formula")
+        self.assertEqual(_clean_title("**Newton Second Law**."), "Newton Second Law")
+
+    def test_only_uses_first_line(self):
+        self.assertEqual(
+            _clean_title("Photosynthesis in Plants\nThis is because plants use light."),
+            "Photosynthesis in Plants",
+        )
+
+    def test_rejects_unusable_output(self):
+        for value in ["", None, "   ", "Ok", "x", "**"]:
+            with self.subTest(value=value):
+                self.assertEqual(_clean_title(value), "")
+
+    def test_caps_length_without_splitting_a_word(self):
+        title = _clean_title("The Very Long Topic Of Quadratic Equations In Grade Ten")
+        self.assertLessEqual(len(title), 50)
+        self.assertLessEqual(len(title.split()), 6)
+
+
+class HeuristicTitleTests(TestCase):
+    def test_strips_question_verbs(self):
+        self.assertEqual(_heuristic_title("What is photosynthesis?"), "photosynthesis")
+        self.assertEqual(_heuristic_title("Solve exercise 7.1"), "exercise 7.1")
+
+    def test_keeps_decimals_and_exercise_numbers_intact(self):
+        # Replacing every "." used to turn "7.1" into "7 1".
+        self.assertIn("7.1", _heuristic_title("explain 7.1 in detail"))
+        self.assertIn("9.8", _heuristic_title("What is 9.8 times 3?"))
+
+    def test_falls_back_to_default_for_empty_input(self):
+        self.assertEqual(_heuristic_title(""), "New Chat")
+        self.assertEqual(_heuristic_title("!!"), "New Chat")
+        self.assertEqual(_heuristic_title("a b"), "New Chat")
+
+
+class ModelUnavailableDetectionTests(TestCase):
+    """A retired model name must be distinguishable from a bad key or quota,
+    otherwise the fallback chain burns every key against an error no model can
+    fix."""
+
+    def test_retired_model_is_detected(self):
+        for message in [
+            "The model `llama3-70b-8192` has been decommissioned and is no longer supported.",
+            "Model 'deepseek-v4-flash-free' is not supported or not configured on the system.",
+            "Groq HTTP 404 for model x: model_not_found",
+        ]:
+            with self.subTest(message=message):
+                self.assertTrue(_is_model_unavailable_error(Exception(message)))
+
+    def test_auth_quota_and_rate_errors_are_not_model_errors(self):
+        for message in [
+            "Groq HTTP 401 for model x: invalid api key",
+            "Kira HTTP 429 for model x: rate limit exceeded",
+            "Insufficient VND wallet balance (0 VND remaining).",
+        ]:
+            with self.subTest(message=message):
+                self.assertFalse(_is_model_unavailable_error(Exception(message)))

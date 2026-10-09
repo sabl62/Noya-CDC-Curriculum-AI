@@ -3,38 +3,33 @@ import {
   LogOut,
   Moon,
   Sun,
-  Trash2,
   User,
   X,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
+import { usageAPI } from "../services/api";
 
 const PRO_SETTINGS_MODULES = import.meta.glob("../pro/SettingsPro.jsx", { eager: true });
 const ProSettings = PRO_SETTINGS_MODULES["../pro/SettingsPro.jsx"]?.default;
 const proSettingsTabs = PRO_SETTINGS_MODULES["../pro/SettingsPro.jsx"]?.tabs || [];
 
 const SETTINGS_KEYS = {
-  THEME: "theme",
   CONTEXT_MEMORY: "noya_context_memory",
-  USAGE_DATE: "noya_usage_date",
-  USAGE_COUNT: "noya_usage_count",
-  FREE_RESETS_LEFT: "noya_free_resets_left",
 };
 
-const getToday = () => new Date().toISOString().slice(0, 10);
-
-const getUsageData = () => {
-  const date = localStorage.getItem(SETTINGS_KEYS.USAGE_DATE);
-  const count = parseInt(localStorage.getItem(SETTINGS_KEYS.USAGE_COUNT) || "0", 10);
-  const freeResets = parseInt(localStorage.getItem(SETTINGS_KEYS.FREE_RESETS_LEFT) || "3", 10);
-  const today = getToday();
-  if (date !== today) {
-    localStorage.setItem(SETTINGS_KEYS.USAGE_DATE, today);
-    localStorage.setItem(SETTINGS_KEYS.USAGE_COUNT, "0");
-    localStorage.setItem(SETTINGS_KEYS.FREE_RESETS_LEFT, "3");
-    return { count: 0, freeResetsLeft: 3, resetInHours: 24 - new Date().getHours() };
-  }
-  return { count, freeResetsLeft: freeResets, resetInHours: 24 - new Date().getHours() };
+const formatResetTime = (resetsAt) => {
+  if (!resetsAt) return "Starts after your first counted chat";
+  const minutes = Math.max(1, Math.ceil((new Date(resetsAt).getTime() - Date.now()) / 60000));
+  if (minutes <= 1) return "Resets in less than a minute";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remainingMinutes = minutes % 60;
+  const duration = days > 0
+    ? `${days}d ${hours}h`
+    : hours > 0
+      ? `${hours}h ${remainingMinutes}m`
+      : `${remainingMinutes}m`;
+  return `Resets in ${duration}`;
 };
 
 const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false }) => {
@@ -43,7 +38,9 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
   const [contextMemory, setContextMemory] = useState(() => {
     return localStorage.getItem(SETTINGS_KEYS.CONTEXT_MEMORY) !== "false";
   });
-  const [usage, setUsage] = useState(getUsageData);
+  const [usage, setUsage] = useState(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState("");
 
   useEffect(() => {
     const handleKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -51,20 +48,30 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  useEffect(() => {
+    if (activeTab !== "usage") return undefined;
+    let cancelled = false;
+    setUsageLoading(true);
+    setUsageError("");
+
+    usageAPI.getStats()
+      .then((data) => {
+        if (!cancelled) setUsage(data);
+      })
+      .catch(() => {
+        if (!cancelled) setUsageError("Usage data could not be loaded. Please try again.");
+      })
+      .finally(() => {
+        if (!cancelled) setUsageLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [activeTab]);
+
   const handleContextMemoryToggle = () => {
     const next = !contextMemory;
     setContextMemory(next);
     localStorage.setItem(SETTINGS_KEYS.CONTEXT_MEMORY, String(next));
-  };
-
-  const handleResetUsage = () => {
-    const data = getUsageData();
-    if (data.freeResetsLeft > 0) {
-      const next = data.freeResetsLeft - 1;
-      localStorage.setItem(SETTINGS_KEYS.FREE_RESETS_LEFT, String(next));
-      localStorage.setItem(SETTINGS_KEYS.USAGE_COUNT, "0");
-      setUsage({ ...getUsageData(), freeResetsLeft: next, count: 0 });
-    }
   };
 
   const handleLogout = () => {
@@ -138,41 +145,34 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
 
             {activeTab === "usage" && (
               <div className="settings-section">
-                <h3>Daily Usage</h3>
-                <div className="settings-usage-card">
-                  <div className="settings-usage-header">
-                    <span className="settings-usage-label">Messages today</span>
-                    <span className="settings-usage-reset">Resets in {usage.resetInHours}h</span>
-                  </div>
-                  <div className="settings-usage-bar-wrap">
-                    <div className="settings-usage-bar">
-                      <div
-                        className="settings-usage-bar-fill"
-                        style={{ width: `${Math.min((usage.count / 50) * 100, 100)}%` }}
-                      />
-                    </div>
-                    <span className="settings-usage-count">{usage.count} / 50</span>
-                  </div>
-                  <p className="settings-usage-note">Demo limit — no actual cap enforced yet</p>
-                </div>
-
-                <h3>Reset Usage</h3>
-                <div className="settings-reset-card">
-                  <div className="settings-reset-info">
-                    <span className="settings-reset-label">Free resets remaining</span>
-                    <span className="settings-reset-count">{usage.freeResetsLeft} / 3</span>
-                  </div>
-                  <p className="settings-reset-desc">
-                    After free resets are used, each reset costs Rs. 50.
-                  </p>
-                  <button
-                    className="settings-reset-btn"
-                    onClick={handleResetUsage}
-                    disabled={usage.freeResetsLeft <= 0 || usage.count === 0}
-                  >
-                    Reset now
-                  </button>
-                </div>
+                <h3>Chat Usage</h3>
+                {usageLoading && <p className="settings-usage-note">Loading usage…</p>}
+                {usageError && <p className="settings-usage-note" role="alert">{usageError}</p>}
+                {usage && !usageLoading && (
+                  <>
+                    <p className="settings-usage-note">
+                      {usage.plan_tier === "paid" ? "Pro plan" : "Free plan"}
+                    </p>
+                    {[ ["Daily chats", usage.daily], ["Monthly chats", usage.monthly] ].map(([label, quota]) => (
+                      <div className="settings-usage-card" key={label}>
+                        <div className="settings-usage-header">
+                          <span className="settings-usage-label">{label} remaining</span>
+                          <span className="settings-usage-reset">{formatResetTime(quota.resets_at)}</span>
+                        </div>
+                        <div className="settings-usage-bar-wrap">
+                          <div className="settings-usage-bar">
+                            <div
+                              className="settings-usage-bar-fill"
+                              style={{ width: `${Math.min((quota.used / quota.limit) * 100, 100)}%` }}
+                            />
+                          </div>
+                          <span className="settings-usage-count">{quota.remaining} / {quota.limit}</span>
+                        </div>
+                        <p className="settings-usage-note">{quota.used} counted chats used</p>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             )}
 

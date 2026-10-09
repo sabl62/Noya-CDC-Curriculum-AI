@@ -148,13 +148,145 @@ def _is_valid_response(text: str) -> bool:
     return not any(marker in lower for marker in _INVALID_RESPONSE_MARKERS)
 
 
-_GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-2.0-flash"]
+_GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]
 _DEEPSEEK_MODEL = "deepseek-v4-flash-free"
 _DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
 _CEREBRAS_ENDPOINT = "https://api.cerebras.ai/v1"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1"
 _KIRA_ENDPOINT = "https://kiraai.vn/api/v1"
 _KIRA_MODEL_FREE = "deepseek-v4-flash-free"
+
+# Cheap, fast models used for the two small side-tasks (titles + question
+# classification). These are separate chains from the answer models because
+# both providers retire model names regularly and a 404/decommissioned model
+# must not take the whole chat path down with it.
+_GROQ_TITLE_MODEL = os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+_GROQ_TITLE_FALLBACKS = ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+
+# A failure that names the *model* is the only kind another model can fix.
+# Auth, quota and rate-limit errors fail identically for every model, so they
+# must abort the chain instead of silently burning every key against it.
+_MODEL_UNAVAILABLE_MARKERS = (
+    "model_decommissioned",
+    "model_not_found",
+    "decommissioned",
+    "model not found",
+    "not supported or not configured",
+    "invalid model",
+    "unknown model",
+    "is not supported",
+    "http 404",
+)
+
+
+def _is_model_unavailable_error(error: Exception) -> bool:
+    """True when the failure is about the model name, so another model may work."""
+    text = str(error).lower()
+    return any(marker in text for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+def _model_chain(primary: str, fallbacks: list) -> list:
+    return [primary] + [m for m in fallbacks if m != primary]
+
+
+_TITLE_SYSTEM_PROMPT = (
+    "You generate short chat titles for a student study assistant. "
+    "Rules:\n"
+    "- 3 to 6 words maximum\n"
+    "- Be SPECIFIC to the topic (mention the concept, not just 'question')\n"
+    "- Use title case\n"
+    "- Never start with 'Ask', 'Solve', 'Explain', 'This' — start with the topic name\n"
+    "- Examples of GOOD titles: 'Compound Interest Formula', 'Photosynthesis Process', 'Quadratic Equations', 'Newton's Laws of Motion'\n"
+    "- Examples of BAD titles: 'Solve Exercise', 'This Simply', 'Math Question', 'Study Help'\n"
+    "- Respond with ONLY the title, no quotes, no punctuation"
+)
+
+# Leading words that make a title vague rather than descriptive.
+_TITLE_NOISE_PREFIX = re.compile(
+    r"^(?:"
+    r"what(?:'s| is| are)?|explain|describe|define|"
+    r"how (?:do|does|did|to|can|could|is|are)|"
+    r"why (?:do|does|did|is|are|was|were)|"
+    r"when (?:do|does|did|is|are|was|were)|"
+    r"where (?:do|does|did|is|are|was|were)|"
+    r"who(?:'s| is| are| was| were)?|"
+    r"solve|find|calculate|compute|show|tell me|give me|help me|"
+    r"can you|i (?:want|need|would like)(?: to)?|please|"
+    r"write|read|practice|teach|help|"
+    r"steps?(?: to)?|difference between"
+    r")\s+"
+    # Optional filler that follows the trigger verb: "explain ME ABOUT the ...".
+    r"(?:me\s+)?(?:about\s+|us\s+on\s+|on\s+|the\s+|this\s+)?",
+    flags=re.IGNORECASE,
+)
+
+# Sentence punctuation only — a period between digits is part of a decimal or
+# an exercise number ("7.1", "9.8") and must survive.
+_TITLE_SENTENCE_PUNCT = re.compile(r"(?<!\d)[.!?]+|[.!?]+(?!\d)")
+
+
+def _truncate_title(text: str) -> str:
+    """Cap a title at 6 words / 50 chars without cutting a word in half."""
+    words = text.split()
+    if len(words) > 6:
+        text = " ".join(words[:6])
+    if len(text) > 50:
+        text = text[:50].rsplit(" ", 1)[0]
+    return text.strip()
+
+
+def _clean_title(raw: str) -> str:
+    """Normalise a model-generated title, rejecting anything unusable.
+
+    Small models like to answer with quotes, markdown, a 'Title:' prefix or a
+    sentence of commentary. Anything that is not 2-6 usable words is discarded
+    so the caller can move on to the next provider.
+    """
+    if not raw:
+        return ""
+
+    # Keep only the first line — models sometimes add an explanation below it.
+    # Guard the index: a whitespace-only completion strips down to no lines.
+    first_line = raw.strip().splitlines()
+    if not first_line:
+        return ""
+    text = first_line[0].strip()
+    text = text.strip("*_` ")
+    text = re.sub(r"^(?:title|t)\s*[:\-–]\s*", "", text, flags=re.IGNORECASE)
+    text = text.strip().strip("\"'“”‘’").strip()
+    # Re-strip emphasis after the punctuation pass so "**Law**." -> "Law".
+    text = _TITLE_SENTENCE_PUNCT.sub(" ", text)
+    text = text.strip().strip("*_` ").strip()
+
+    if not text:
+        return ""
+
+    text = _truncate_title(text)
+    words = text.split()
+    if len(words) < 2 or len(text) < 4:
+        return ""
+    return text
+
+
+def _heuristic_title(message: str) -> str:
+    """Deterministic last-resort title derived from the student's own words."""
+    text = (message or "").strip()
+    if not text:
+        return "New Chat"
+
+    # A pasted question can carry an exercise number or a leading number;
+    # keep those, they are often the most identifying part of the title.
+    text = _TITLE_NOISE_PREFIX.sub("", text)
+    text = _TITLE_SENTENCE_PUNCT.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return "New Chat"
+
+    text = _truncate_title(text)
+    # Unlike a model response, a single meaningful word ("Photosynthesis") is a
+    # perfectly good title, so only require a minimum length here.
+    return text if len(text) >= 4 else "New Chat"
 
 
 def _model_for(provider, plan_tier, free_model):
@@ -457,27 +589,43 @@ class AIService:
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        payload = {
-            "model": "llama3-70b-8192",
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": max_tokens,
-        }
-        with httpx.Client(timeout=timeout) as http:
-            resp = http.post(
-                _GROQ_ENDPOINT + "/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                content=json.dumps(payload),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if text:
-                return text.strip()
-        raise Exception("Empty Groq response")
+
+        last_error = None
+        for model in _model_chain(_GROQ_TITLE_MODEL, _GROQ_TITLE_FALLBACKS):
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.1,
+                "max_tokens": max_tokens,
+            }
+            try:
+                with httpx.Client(timeout=timeout) as http:
+                    resp = http.post(
+                        _GROQ_ENDPOINT + "/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        content=json.dumps(payload),
+                    )
+                # Groq reports a bad model name as a 400 with the reason in the
+                # body, so raise_for_status() alone is not enough to tell a
+                # retired model apart from a bad key.
+                if resp.status_code >= 400:
+                    raise Exception(
+                        f"Groq HTTP {resp.status_code} for model {model}: {resp.text[:200]}"
+                    )
+                data = resp.json()
+                text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                if text and text.strip():
+                    return text.strip()
+                last_error = Exception(f"Empty Groq response for model {model}")
+            except Exception as e:
+                last_error = e
+                if not _is_model_unavailable_error(e):
+                    raise
+                logger.info("Groq model %s unavailable, trying next: %s", model, e)
+        raise last_error or Exception("Empty Groq response")
 
     def _call_kira(
         self, api_key: str, model: str, prompt: str, system_prompt: str,
@@ -502,10 +650,15 @@ class AIService:
                 },
                 content=json.dumps(payload),
             )
-            resp.raise_for_status()
+            # Same as Groq: an unsupported model name comes back as a 4xx whose
+            # reason is only in the body, so surface it for the fallback chain.
+            if resp.status_code >= 400:
+                raise Exception(
+                    f"Kira HTTP {resp.status_code} for model {model}: {resp.text[:200]}"
+                )
             data = resp.json()
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if text:
+            text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            if text and text.strip():
                 return text.strip()
         raise Exception("Empty Kira response")
 
@@ -663,55 +816,40 @@ Rules:
         raise AIProviderFailure(classify_provider_failures(errors))
 
     def generate_title(self, user_message: str) -> str:
-        """Generate a short, specific title via Kira/Groq (fast/cheap), fallback to heuristic."""
-        system_prompt = (
-            "You generate short chat titles for a student study assistant. "
-            "Rules:\n"
-            "- 3 to 6 words maximum\n"
-            "- Be SPECIFIC to the topic (mention the concept, not just 'question')\n"
-            "- Use title case\n"
-            "- Never start with 'Ask', 'Solve', 'Explain', 'This' — start with the topic name\n"
-            "- Examples of GOOD titles: 'Compound Interest Formula', 'Photosynthesis Process', 'Quadratic Equations', 'Newton's Laws of Motion'\n"
-            "- Examples of BAD titles: 'Solve Exercise', 'This Simply', 'Math Question', 'Study Help'\n"
-            "- Respond with ONLY the title, no quotes, no punctuation"
-        )
-        prompt = f"Student's first message: {user_message[:200]}"
+        """Generate a short, specific title, falling back to a local heuristic.
 
-        # Try Kira keys first (fast, cheap)
-        for key in self.kira_keys:
+        Uses Groq only, skipping unavailable Groq models and keys. Never raises:
+        a title is cosmetic, so a failure here must not affect the answer the
+        student is waiting for.
+        """
+        message = (user_message or "").strip()
+        if not message:
+            return "New Chat"
+
+        prompt = f"Student's first message: {message[:200]}"
+
+        def attempt(provider, call):
             try:
-                result = self._call_kira(key, _KIRA_MODEL_FREE, prompt, system_prompt, max_tokens=20, timeout=8)
-                if result:
-                    result = result.strip().strip('"\'').strip(".!")
-                    if 2 <= len(result.split()) <= 6 and len(result) <= 50:
-                        return result
+                title = _clean_title(call())
             except Exception as e:
-                print(f"[AI] Kira title key failed (trying next): {e}")
+                logger.info("Title generation via %s failed: %s", provider, e)
+                return ""
+            if title:
+                logger.info("Title generated via %s: %r", provider, title)
+            return title
 
-        # Try Groq keys next
+        # Groq is the only remote provider used for title generation.
         for key in self.groq_keys:
-            try:
-                result = self._call_groq(key, prompt, system_prompt, max_tokens=20, timeout=8)
-                if result:
-                    result = result.strip().strip('"\'').strip(".!")
-                    if 2 <= len(result.split()) <= 6 and len(result) <= 50:
-                        return result
-            except Exception as e:
-                print(f"[AI] Groq title key failed (trying next): {e}")
+            title = attempt(
+                "groq",
+                lambda k=key: self._call_groq(k, prompt, _TITLE_SYSTEM_PROMPT, 20, 8),
+            )
+            if title:
+                return title
 
-        # Heuristic fallback
-        title = (user_message or "").strip()
-        title = re.sub(
-            r"^(what is|what are|explain|describe|define|how (?:do|does|to|can|is)|why (?:do|does|is|are)|when (?:do|does|is|are)|where (?:do|does|is|are)|who (?:is|are|was|were)|solve|find|calculate|compute|help me|can you|i (?:want|need|would like) to|tell me about|give me|write|read|practice)\s+",
-            "", title, flags=re.IGNORECASE,
-        )
-        title = title.replace("?", "").replace("!", "").replace(".", "")
-        words = title.split()
-        if len(words) > 6:
-            title = " ".join(words[:6])
-        if len(title) > 50:
-            title = title[:50].rsplit(" ", 1)[0]
-        return title.strip() or "New Chat"
+        fallback = _heuristic_title(message)
+        logger.info("Title generated via heuristic: %r", fallback)
+        return fallback
 
     def chat(
         self, message: str, user=None, personal_context: str = "", context: Dict = None
@@ -742,7 +880,7 @@ Rules:
         # ─── CHAPTER-SCOPED PATH (primary, zero-hallucination) ───
         chapter_context = ""
         if chapter_title:
-            yield {"type": "status", "stage": "context", "message": f"Reading {subject.title()} textbook — {chapter_title}..."}
+            yield {"type": "status", "stage": "context", "message": f"Studying..."}
             chapter_context = self._get_chapter_context(subject, chapter_title, message)
 
             if chapter_context:
@@ -773,15 +911,15 @@ Rules:
                     }
                     return
 
-                yield {"type": "status", "stage": "cache", "message": "Checking cache for similar questions..."}
+                yield {"type": "status", "stage": "cache", "message": "Remembering..."}
                 cache_decision = cache_service.inspect(message, context, user=user, plan_tier=plan_tier)
 
                 if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
-                    yield {"type": "status", "stage": "cache_hit", "message": "Found cached answer!"}
+                    yield {"type": "status", "stage": "cache_hit", "message": ""}
                     yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
                     return
 
-                yield {"type": "status", "stage": "generating", "message": "Generating detailed answer from textbook..."}
+                yield {"type": "status", "stage": "generating", "message": "Almost there..."}
                 system_prompt = f"""You are a Grade 10 CDC study assistant. Answer strictly in English.
 You have been provided with retrieved CDC textbook content for the selected chapter.
 
@@ -793,7 +931,8 @@ CRITICAL RULES:
 5. ANTI-HALLUCINATION: Do NOT invent or guess which exercise number or question the student is asking about. If the student says "solve exercise 7.3 question 9", look for that exact question in the provided textbook content. If the exact question text is not found in the content, say "I could not find this specific question in the provided textbook content" and ask the student to provide the exact question text. NEVER make up a question that was not provided by the student.
 6. NEVER modify, reinterpret, or "improve" the student's question. Answer exactly what they asked, not what you think they meant.
 7. SAMPLE/EXAMPLE GENERATION: When the student explicitly asks you to prepare, create, write, or generate a sample (e.g., "prepare a sample brochure", "give an example of", "write a sample"), you SHOULD create a well-structured example based on the guidelines, structure, or format described in the textbook content. Use the textbook's instructions as a template and fill it with realistic, appropriate content. This is NOT hallucination — it is applying what the textbook teaches. Always note that the sample is an illustrative example based on the chapter's guidelines.
-8. DIAGRAMS: When asked to draw, sketch, or illustrate a diagram, use the appropriate format:
+8. SOLVING A QUESTION OF YOUR CHOICE: When the student asks you to solve any question of your choice from the exercise, Please Specify the Exercise/ Chapter and Question.
+9. DIAGRAMS: When asked to draw, sketch, or illustrate a diagram, use the appropriate format:
    - Venn diagrams: Use ```venn code block with this format:
      ```
      venn
@@ -850,7 +989,7 @@ INSTRUCTIONS:
                             timeout=60,
                             plan_tier=_retry_plan_tier(plan_tier),
                         )
-                    yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
+                    yield {"type": "status", "stage": "caching", "message": "Memorizing..."}
                     cache_service.learn_from_ai(
                         message=message,
                         answer=response.rstrip(),
@@ -873,10 +1012,9 @@ INSTRUCTIONS:
                     return
 
         # ─── FALLBACK PATH: Cache → RAG → AI ───
-        yield {"type": "status", "stage": "cache", "message": "Checking cache for similar questions..."}
+        yield {"type": "status", "stage": "cache", "message": "Remembering..."}
         cache_decision = cache_service.inspect(message, context, user=user, plan_tier=plan_tier)
         if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
-            yield {"type": "status", "stage": "cache_hit", "message": "Found cached answer!"}
             yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
             return
 
@@ -955,7 +1093,7 @@ INSTRUCTIONS:
                     timeout=30,
                     plan_tier=_retry_plan_tier(plan_tier),
                 )
-            yield {"type": "status", "stage": "caching", "message": "Saving answer for next time..."}
+            yield {"type": "status", "stage": "caching", "message": "Almost There..."}
             cache_service.learn_from_ai(
                 message=message,
                 answer=response,

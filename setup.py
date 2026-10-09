@@ -1,7 +1,8 @@
 import platform as p
 import subprocess as sp
+import os
 
-ENV_PATH = "backend-main/.env.test"
+ENV_PATH = "backend-main/.env"
 
 RESET = "\033[0m"
 PINE = "\033[38;5;30m"
@@ -166,15 +167,24 @@ if detect() in ("Windows", "Darwin", "Linux"):
         )
 
         if detect() == "Windows":
-            python = "backend-main/venv/Scripts/python.exe"
-            pip = "backend-main/venv/Scripts/pip.exe"
+            python = os.path.abspath(
+                os.path.join(backend_dir, "venv", "Scripts", "python.exe")
+            )
+            pip = os.path.abspath(
+                os.path.join(backend_dir, "venv", "Scripts", "pip.exe")
+            )
         else:
-            python = "backend-main/venv/bin/python"
-            pip = "backend-main/venv/bin/pip"
+            python = os.path.abspath(
+                os.path.join(backend_dir, "venv", "bin", "python")
+            )
+            pip = os.path.abspath(
+                os.path.join(backend_dir, "venv", "bin", "pip")
+            )
 
         note("Installing backend packages.")
         sp.run(
-            [pip, "install", "-r", "backend-main/requirements.txt"],
+            [pip, "install", "-r", "requirements.txt"],
+            cwd=backend_dir,
             check=True
         )
 
@@ -194,21 +204,37 @@ if detect() in ("Windows", "Darwin", "Linux"):
 
         success("Backend setup complete.")
         note("Starting the Noya server.")
-        sp.run(
+        server_options = {}
+        if detect() == "Windows":
+            server_options["creationflags"] = sp.CREATE_NEW_CONSOLE
+        sp.Popen(
             [python, "manage.py", "runserver"],
             cwd=backend_dir,
-            check=True
+            **server_options
         )
 
     def fsetup():
         title("06  FRONTEND", "Preparing the Noya web app in a separate terminal.")
 
-        sp.Popen([
-            "powershell",
-            "-NoExit",
-            "-Command",
-            "cd frontend; npm install; npm run dev"
-        ])
+        frontend_dir = "frontend"
+        npm = "npm.cmd" if detect() == "Windows" else "npm"
+
+        note("Installing frontend packages.")
+        sp.run(
+            [npm, "install"],
+            cwd=frontend_dir,
+            check=True
+        )
+
+        note("Starting the Noya web app.")
+        server_options = {}
+        if detect() == "Windows":
+            server_options["creationflags"] = sp.CREATE_NEW_CONSOLE
+        sp.Popen(
+            [npm, "run", "dev"],
+            cwd=frontend_dir,
+            **server_options
+        )
 
     bsetup()
     fsetup()

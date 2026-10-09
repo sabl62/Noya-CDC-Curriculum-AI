@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.clickjacking import xframe_options_exempt
 from .models import ChatMessage, ChatSession, KnowledgeBaseEntry, SemanticAnswerCache, CacheLookupEvent
-from .usage_limits import UsageLimitExceeded, reserve_chat_request
+from .usage_limits import UsageLimitExceeded, reserve_chat_request, usage_snapshot
 from .features import billing_enabled
 from .error_handling import SERVER_FAILURE, user_error_message
 from .serializers import (
@@ -40,6 +40,7 @@ from .semantic_cache import (
     normalize_query,
     scope_filters,
 )
+from .curriculum_scope import SUBJECT_ALIASES, normalize_subject
 from .content_processor import (
     CONTENT_PROCESSOR_SYSTEM_PROMPT,
     build_content_processor_prompt,
@@ -65,6 +66,25 @@ def get_ai_service():
 def clamp_session_title(value, fallback='New Chat'):
     title = str(value or fallback).strip() or fallback
     return title[:197] + '...' if len(title) > 200 else title
+
+
+# Titles a session carries before the model has named it. New sessions are
+# seeded with the subject's display name so the sidebar is useful immediately,
+# which means "is this still a placeholder?" has to recognise subject names too.
+_PLACEHOLDER_SESSION_TITLES = {'', 'new chat', 'untitled', 'untitled chat'}
+
+
+def is_placeholder_session_title(title):
+    """True while a session still carries a placeholder instead of a real title.
+
+    Compared through normalize_subject() so every spelling the frontend can
+    seed ("Science", "Mathematics", "Optional Mathematics", "omaths", ...) is
+    covered by SUBJECT_ALIASES without having to enumerate them.
+    """
+    candidate = str(title or '').strip().lower()
+    if candidate in _PLACEHOLDER_SESSION_TITLES:
+        return True
+    return normalize_subject(candidate) in SUBJECT_ALIASES
 
 
 def _clip_context_text(value, limit=900):
@@ -351,15 +371,17 @@ class ChatView(APIView):
                             )
 
                             if session:
-                                current_title = session.title.lower() if session.title else ''
-                                is_generic = current_title in ['', 'new chat', 'english', 'math', 'mathematics', 'science', 'omaths', 'social', 'social studies']
-                                if is_generic and message:
+                                # Only name a session once. The title stays a
+                                # placeholder until the model replaces it, and a
+                                # title that survives a failed generation must not
+                                # be retried on every later message.
+                                if is_placeholder_session_title(session.title) and message:
                                     try:
                                         new_title = service.generate_title(message)
                                         if new_title:
                                             session.title = clamp_session_title(new_title)
                                     except Exception as e:
-                                        print(f"Title generation error: {e}")
+                                        logger.warning("Title generation failed: %s", e)
                                         session.title = clamp_session_title(message, fallback='New Chat')
                                     session.save()
 
@@ -651,7 +673,7 @@ class RAGStatusView(APIView):
             return Response({'error': str(e), 'status': 'error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class InitializeRAGView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAdminUser]
     def post(self, request):
         force = request.data.get('force_rebuild', False)
         try:
@@ -708,16 +730,32 @@ class ReferralInfoView(APIView):
 
 
 class UsageStatsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        total_messages = ChatMessage.objects.filter(user=request.user).count()
-        total_sessions = ChatSession.objects.filter(user=request.user).count()
+        user = request.user if request.user.is_authenticated else None
+        quota = usage_snapshot(request, user)
+        stats = {
+            'plan_tier': quota['plan'],
+            'daily': quota['daily'],
+            'monthly': quota['monthly'],
+        }
+
+        if user is None:
+            return Response({
+                **stats,
+                'total_messages': 0,
+                'total_sessions': 0,
+                'today_messages': quota['daily']['used'],
+            })
+
+        total_messages = ChatMessage.objects.filter(user=user).count()
+        total_sessions = ChatSession.objects.filter(user=user).count()
         today = timezone.localdate()
-        today_messages = ChatMessage.objects.filter(user=request.user, created_at__date=today).count()
+        today_messages = ChatMessage.objects.filter(user=user, created_at__date=today).count()
         return Response({
+            **stats,
             'total_messages': total_messages,
             'total_sessions': total_sessions,
             'today_messages': today_messages,
-            'plan_tier': request.user.plan_tier if billing_enabled() else 'free',
         })

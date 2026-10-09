@@ -363,6 +363,14 @@ function AppContent() {
     setCurrentSessionId(sessionId);
   }, []);
 
+  // Opening a chat from the sidebar must update App too, otherwise the
+  // `externalSessionId` prop and the chat currently on screen disagree.
+  const handleSessionSelected = useCallback((sessionId) => {
+    setPendingSession(false);
+    if (!sessionId) return;
+    setCurrentSessionId((current) => (current === sessionId ? current : sessionId));
+  }, []);
+
   if (isValidating || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
@@ -404,6 +412,7 @@ function AppContent() {
                   onNewChat={handleNewChat}
                   onSessionPending={handleSessionPending}
                   onSessionCreated={handleSessionCreated}
+                  onSessionSelected={handleSessionSelected}
                   theme={theme}
                   onToggleTheme={toggleTheme}
                   billingAvailable={billingAvailable}

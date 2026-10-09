@@ -1,139 +1,121 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="frontend/src/assets/noya-logo.svg">
-    <img src="frontend/src/assets/noya-logo.svg" width="200" height="200" alt="Noya">
-  </picture>
-</p>
+# Noya
 
-<h1 align="center">Noya</h1>
+Noya is a Grade 10 study chat application for Nepal's CDC curriculum. The web client is built with React and Vite; the API and application data are handled by Django REST Framework.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/React-18-blue?logo=react" alt="React 18">
-  <img src="https://img.shields.io/badge/Django-4.2-green?logo=django" alt="Django 4.2">
-  <img src="https://img.shields.io/badge/Gemini-2.5_Flash-orange?logo=google" alt="Gemini 2.5 Flash">
-  <img src="https://img.shields.io/badge/PostgreSQL-Supabase-336791?logo=postgresql" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
-</p>
+The repository contains curriculum lookup code, but this checkout does **not** contain the `backend-main/api/cdc_curriculum/` PDF directory. Textbook-grounded responses therefore require you to provide the relevant PDFs and configure Qdrant. Without those resources, the app can start, but its curriculum retrieval features are not ready to use.
 
----
+## What is implemented
 
-## Table of Contents
+- The subject picker currently exposes Science, Mathematics, Optional Mathematics, and English.
+- The chat endpoint streams status and answer events using Server-Sent Events (SSE). Guests can chat; saved sessions and history require an account.
+- Chat routing checks the database-backed answer cache and knowledge base, then uses selected-chapter PDF context or Qdrant retrieval when available, before requesting a live model answer.
+- Live answer providers are DeepSeek, Kira, and Gemini, in a question-dependent fallback order. Groq is used for title generation and question classification.
+- The semantic cache uses a process-local LRU plus database-backed semantic answers and precomputed knowledge entries.
+- JWT authentication, light/dark themes, Markdown/KaTeX rendering, and chat history are present in the code.
+- Daily and monthly chat limits are enforced by the backend. Optional Pro and payment routes are included only when the optional billing modules are present and load successfully.
 
-- [About](#about)
-- [Features](#features)
-- [Local Development](#local-development)
-- [Enviroment Variables](#environment-variables)
-- [Tech Stack](#tech-stack)
-- [File Structure](#file-structure)
+These features depend on external credentials, database records, and curriculum files as described below. Their presence in the code does not mean the external services or content are configured in a deployment.
 
----
+## Requirements
 
-## About
+- Python 3.10 or newer
+- Node.js 18 or newer and npm
+- A Gemini key for the setup script and a configured live answer provider
+- Qdrant and the curriculum PDFs if you want to use PDF indexing and Qdrant retrieval
 
-Noya is a **Retrieval-Augmented Generation (RAG)** system built for **Grade 10 students** following Nepal's **CDC (Curriculum Development Centre) national curriculum**.
+## Local development
 
-In Simple Language, **Noya is an AI for grade 10 books**. It is built for Nepali students of grade 10 to help them with their assignments, studies and more. 
-
----
-
-## Features
-
-- **Textbook Related AI Chat** — Answers come directly from CDC Textbooks (Janak Sikshya Samagri)
-- **Subject & Chapter Selection** — Science, Mathematics, Optional Mathematics, English (Social Studies & Nepali coming soon)
-- **4-Tier Semantic Cache** — Built as Noya's own brain, Check The docs folder.
-- **JWT Authentication** — Secure Authentication System with token rotation.
-- **Dark / Light Theme** — Clean, minimal design with Light and Dark themes.
-- **Markdown + LaTeX Rendering** — LaTeX Math Support, Same mathematical Symbols as your textbook.
-- **Chat Sessions** — Create, continue, and delete conversation histories
-- **Free & Paid Plans** — billing integration with plan-based model selection, paid via **eSewa**, **Khalti**, and Stripe
-
----
-
-## Local Development
-
-### Prerequisites
-
-| Requirement | Version | Link |
-|---|---|---|
-| Python | 3.10+ | [python.org](https://python.org/downloads) |
-| Node.js | 18+ | [nodejs.org](https://nodejs.org) |
-| Git | Any recent | [git-scm.com](https://git-scm.com) |
-
----
-
-### Step1: Clone/Download the Repository:
+The backend reads environment variables from `backend-main/.env`. Start from the example at the repository root:
 
 ```bash
-git clone <repo_url>
+copy .env.example backend-main/.env
 ```
----
 
-### Step2: Get into the "Noya/" folder, open it in an IDE.
+On macOS or Linux, use `cp .env.example backend-main/.env` instead. Edit the new file and set the values needed for your setup. Do not commit secrets.
 
----
+Install and start Django:
 
-### Step3: Run the Automated Script:
 ```bash
-python setup.py
-```
-### Add all valid inputs the script asks, and you are ready to go!
-
----
-
-### Open the App
-
-Go to **http://localhost:5173**, register an account, select a subject, and start studying. 
-
----
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SECRET_KEY` | Yes | Django secret key (generate with `python -c "import secrets; print(secrets.token_hex(32))"`) |
-| `DATABASE_URL` | No | PostgreSQL URL. Falls back to SQLite if empty |
-| `GEMINI_API_KEY_1` | Yes | Google Gemini API key ([get one here](https://aistudio.google.com/apikey)) |
-| `QDRANT_URL` | Yes | Qdrant Cloud cluster URL |
-| `QDRANT_API_KEY` | Yes | Qdrant Cloud API key |
-| `DEEPSEEK_API_KEY_1` | No | DeepSeek API key (fallback LLM provider) |
-| `KIRAA_API_KEY_1` | No | Kira AI API key (backup LLM provider) |
-| `GROQ_API_KEY_1` | No | Groq API key (title generation + question classification) |
-| `DEBUG` | No | Set to `true` for development (default: `false`) |
-| `ALLOWED_HOSTS` | No | Comma-separated list of allowed hosts (default: `localhost,127.0.0.1`) |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origins (default: `http://localhost:5173`) |
-| `FRONTEND_URL` | No | Frontend origin gateways redirect back to (default: `http://localhost:5173`) |
-| `ESEWA_MODE` | No | `sandbox` (default, public UAT keys) or `production` |
-| `ESEWA_PRODUCT_CODE` | No | eSewa merchant code (defaults to `EPAYTEST` in sandbox) |
-| `ESEWA_SECRET_KEY` | No | eSewa HMAC secret (defaults to the public UAT secret in sandbox) |
-| `KHALTI_MODE` | No | `sandbox` (default) or `production` |
-| `KHALTI_PUBLIC_KEY` | No | Khalti public key (required to enable Khalti checkout) |
-| `KHALTI_SECRET_KEY` | No | Khalti secret key (required to enable Khalti checkout) |
-
-### Frontend Variables
-
-Create `frontend/.env`:
-
-```
-VITE_API_URL=http://localhost:8000
+cd backend-main
+python -m venv venv
 ```
 
----
+Activate the environment (`venv\Scripts\activate` on Windows, or `source venv/bin/activate` on macOS/Linux), then run:
 
-## Tech Stack
+```bash
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
 
-| Category | Technology |
-|----------|-----------|
-| **Frontend** | React 18, Vite 5, React Router 6, Tailwind CSS 3, KaTeX (LaTeX math) |
-| **Backend** | Django 4.2+, Django REST Framework |
-| **Authentication** | SimpleJWT (access / refresh tokens with blacklisting) |
-| **Database** | PostgreSQL (Supabase) |
-| **Vector Store** | Qdrant Cloud |
-| **Embedding Model** | paraphrase-multilingual-MiniLM-L12-v2 |
-| **LLM Providers** | Gemini (primary), DeepSeek (fallback), Kira AI (backup), Groq (titles/classification) |
-| **Caching** | Custom Built Semantic Cache System |
+In a second terminal, start the web client:
 
----
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-<p align="center">
-  <strong>Developed, Designed, and Created by Sabal Bajagain</strong>
-</p>
+Open the local URL printed by Vite (normally `http://localhost:5173`). The API client defaults to `http://localhost:8000/api`. If your backend uses another host or port, set `VITE_API_URL` in `frontend/.env` (for example, `http://localhost:8000`).
+
+### Automated setup script
+
+`python setup.py` is an optional interactive installer. It prompts for Gemini and DeepSeek keys, a database choice, and Qdrant credentials; creates `backend-main/venv`; installs both dependency sets; runs migrations and `initialize_rag`; then starts the backend and Vite in separate terminals. The script requires the prompted keys even though the application can use provider fallbacks. The RAG command also needs reachable Qdrant and local PDFs; without them, indexing reports an error and the script continues to server startup. Use the manual steps above if you do not have those resources or want to configure only some providers.
+
+## Textbook PDFs and RAG
+
+The expected PDF directory is `backend-main/api/cdc_curriculum/`. The chapter reader looks for subject-named PDFs such as `science.pdf`, `math.pdf`, `omaths.pdf`, and `english.pdf`, either directly in that directory or under `class_10/`. RAG indexing scans that directory recursively. Place only curriculum content you are permitted to use there; the PDFs are not included in this repository.
+
+Configure `QDRANT_URL` and, for a protected Qdrant instance, `QDRANT_API_KEY` in `backend-main/.env`. Install the backend requirements, make sure the PDFs are present, then run:
+
+```bash
+cd backend-main
+python manage.py initialize_rag
+```
+
+Use `python manage.py initialize_rag --status` to inspect the current index or `python manage.py initialize_rag --force-rebuild` to replace it. Rebuilding deletes and recreates the `cdc_curriculum` collection before indexing.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `SECRET_KEY` | Django signing key. Set a private value for any shared or deployed environment. |
+| `DEBUG` | Django debug setting; defaults to `false`. |
+| `ALLOWED_HOSTS` | Comma-separated backend hostnames. |
+| `DATABASE_URL` | Optional PostgreSQL URL. If unset, Django uses `backend-main/db.sqlite3`. Configured PostgreSQL URLs are set to require SSL. |
+| `GEMINI_API_KEY`, `GEMINI_API_KEY_1` … `GEMINI_API_KEY_5` | Gemini credentials. The service reads either the comma-separated `GEMINI_API_KEYS` variable or the numbered/single-key forms. |
+| `DEEPSEEK_API_KEY`, `DEEPSEEK_API_KEY_1` … `DEEPSEEK_API_KEY_5` | Optional DeepSeek credentials for live answers. `DEEPSEEK_ENDPOINT` can override its API endpoint. |
+| `KIRA_API_KEY`, `KIRA_API_KEY_1` … `KIRA_API_KEY_5` | Optional Kira credentials for live-answer fallback. |
+| `GROQ_API_KEY`, `GROQ_API_KEY_1` … `GROQ_API_KEY_5` | Groq credentials for title generation and question classification. |
+| `GROQ_MODEL` | Optional title-generation model override; the service has a Groq-only model fallback chain. |
+| `QDRANT_URL`, `QDRANT_API_KEY` | Qdrant connection for RAG. The API key is optional for a local unauthenticated Qdrant instance. |
+| `TRUSTED_PROXY_IPS` | Comma-separated IPs/CIDRs allowed to supply `X-Forwarded-For`; leave blank unless the backend is behind a proxy you control. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed by Django. |
+| `FRONTEND_URL` | Frontend origin used for referral links and payment returns. |
+| `USAGE_FREE_DAILY_LIMIT`, `USAGE_FREE_MONTHLY_LIMIT`, `USAGE_PAID_DAILY_LIMIT`, `USAGE_PAID_MONTHLY_LIMIT`, `USAGE_RATE_LIMIT_PER_MINUTE` | Optional server-side quota overrides. Defaults are 15/300 chats for Free, 150/1,000 for Pro, and 5 requests per minute. See `backend-main/api/usage_limits.py`. |
+| `ESEWA_*`, `KHALTI_*`, `STRIPE_*` | Optional payment configuration. Billing is available only when its optional code is present and enabled. |
+
+The setup script writes the provider and database values it collects to `backend-main/.env`; it does not create a `frontend/.env` file.
+
+## Project map
+
+```text
+backend-main/
+  backend/                 Django project settings and URL configuration
+  api/                     API views, models, chat, RAG, cache, and billing code
+  api/management/commands/ Django management commands
+  requirements.txt         Python dependencies
+frontend/
+  src/                     React application, components, and API client
+  package.json             Vite scripts and JavaScript dependencies
+docs/                      Architecture, RAG, cache, and API notes
+setup.py                   Optional interactive local setup script
+```
+
+## Documentation
+
+- [Architecture](docs/Architecture.md)
+- [RAG pipeline](docs/RAG_PIPELINE.md)
+- [Cache implementation](docs/cache_architecture.md)
+- [API endpoints](docs/API_EndPoints.md)
+

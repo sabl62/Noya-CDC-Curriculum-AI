@@ -661,7 +661,7 @@ body {
 }
 
 .chat-sidebar {
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   bottom: 0;
   box-shadow: 18px 0 60px rgba(0, 0, 0, 0.12);
@@ -669,11 +669,24 @@ body {
   left: 0;
   overflow-x: hidden;
   position: fixed;
+  scrollbar-color: var(--border-strong) transparent;
   top: 0;
   transform: translateX(-100%);
   transition: transform 180ms var(--ease-out), width 180ms var(--ease-out);
   width: 18.5rem;
   z-index: 40;
+}
+
+.chat-sidebar * {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.chat-sidebar *::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+.chat-sidebar *::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
 }
 
 .chat-sidebar.is-open {
@@ -959,6 +972,96 @@ html.dark .chat-primary-action:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Keep the selected row highlighted while it is being fetched, and make the
+   spinner occupy the same slot as the chevron so the row does not resize. */
+.chat-session-list button.active {
+  cursor: default;
+}
+
+.chat-session-list button:disabled {
+  opacity: 1;
+}
+
+.chat-session-list button .chat-session-spinner,
+.chat-session-list button .chat-session-label {
+  flex-shrink: 0;
+}
+
+.chat-session-list button .chat-session-label {
+  flex: 1 1 auto;
+}
+
+.chat-session-spinner {
+  animation: session-spin 700ms linear infinite;
+  border: 2px solid color-mix(in srgb, var(--pine) 30%, transparent);
+  border-radius: 50%;
+  border-top-color: var(--pine);
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 0.85rem;
+  width: 0.85rem;
+}
+
+@keyframes session-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-session-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.chat-thread-skeleton {
+  display: grid;
+  gap: 1.5rem;
+  padding: 1rem 0 2rem;
+}
+
+.chat-thread-skeleton-turn {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.chat-thread-skeleton-bubble {
+  animation: skeleton-sheen 1.2s var(--ease-in-out) infinite;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.9rem 1.1rem;
+  width: fit-content;
+}
+
+.chat-thread-skeleton-bubble.user {
+  justify-self: end;
+  max-width: 70%;
+}
+
+.chat-thread-skeleton-bubble.assistant {
+  max-width: 88%;
+}
+
+.chat-thread-skeleton-bubble span {
+  animation: skeleton-sheen 1.2s var(--ease-in-out) infinite;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface) 90%, transparent), transparent);
+  border-radius: 6px;
+  height: 0.7rem;
+  inset: 0;
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thread-skeleton,
+  .chat-thread-skeleton-bubble,
+  .chat-thread-skeleton-bubble span {
+    animation: none;
+  }
 }
 
 .chat-session-skeleton {
@@ -1854,142 +1957,6 @@ html.dark .chat-primary-action:hover {
   background: var(--pine-strong);
 }
 
-/* ── Sources sidebar panel ──────────────────────────── */
-.sources-panel {
-  border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
-  display: flex;
-  flex-direction: column;
-  width: 320px;
-  min-width: 320px;
-  height: 100%;
-  overflow: hidden;
-}
-
-.sources-panel-header {
-  align-items: center;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-shrink: 0;
-  justify-content: space-between;
-  padding: 0.85rem 1.1rem;
-}
-
-.sources-panel-title {
-  align-items: center;
-  color: var(--ink);
-  display: flex;
-  font-size: 0.88rem;
-  font-weight: 650;
-  gap: 0.45rem;
-}
-
-.sources-panel-title svg {
-  color: var(--pine);
-}
-
-.sources-panel-close {
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--ink-faint);
-  cursor: pointer;
-  display: flex;
-  height: 1.75rem;
-  justify-content: center;
-  transition: all 140ms var(--ease-out);
-  width: 1.75rem;
-}
-
-.sources-panel-close:hover {
-  background: var(--bg);
-  border-color: var(--border);
-  color: var(--ink);
-}
-
-.sources-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 1rem 1.1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.sources-panel-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-}
-
-.sources-panel-section-title {
-  color: var(--ink-faint);
-  font-size: 0.7rem;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sources-panel-row {
-  align-items: flex-start;
-  display: flex;
-  gap: 0.6rem;
-}
-
-.sources-panel-dot {
-  background: var(--pine);
-  border-radius: 50%;
-  flex-shrink: 0;
-  height: 6px;
-  margin-top: 0.4rem;
-  width: 6px;
-}
-
-.sources-panel-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.sources-panel-label {
-  color: var(--ink-faint);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sources-panel-value {
-  color: var(--ink);
-  font-size: 0.88rem;
-  font-weight: 500;
-  line-height: 1.45;
-  word-break: break-word;
-}
-
-.sources-panel-pages {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.sources-panel-page-tag {
-  background: var(--pine-tint);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--pine);
-  font-size: 0.76rem;
-  font-weight: 600;
-  padding: 0.25rem 0.55rem;
-  transition: border-color 140ms var(--ease-out);
-}
-
-.sources-panel-page-tag:hover {
-  border-color: var(--pine);
-}
-
 /* ── User popup upgrade button ─────────────────────── */
 .chat-popup-btn.upgrade {
   color: var(--brass);
@@ -2469,66 +2436,6 @@ html.dark .chat-primary-action:hover {
   font-size: 0.75rem;
   font-style: italic;
   margin: 0;
-}
-
-.settings-reset-card {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.settings-reset-info {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.settings-reset-label {
-  color: var(--ink);
-  font-size: 0.88rem;
-  font-weight: 600;
-}
-
-.settings-reset-count {
-  color: var(--pine);
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
-.settings-reset-desc {
-  color: var(--ink-faint);
-  font-size: 0.78rem;
-  margin: 0;
-}
-
-.settings-reset-btn {
-  align-items: center;
-  align-self: flex-start;
-  background: var(--pine-tint);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--pine);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: 0.82rem;
-  font-weight: 650;
-  padding: 0.45rem 1rem;
-  transition: all 140ms var(--ease-out);
-  margin-top: 0.25rem;
-}
-
-.settings-reset-btn:hover:not(:disabled) {
-  background: var(--pine);
-  border-color: var(--pine);
-  color: white;
-}
-
-.settings-reset-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .settings-account-card {

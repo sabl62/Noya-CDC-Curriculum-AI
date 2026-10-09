@@ -2,6 +2,7 @@
 import os
 import json
 import glob
+import hashlib
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -139,16 +140,32 @@ class RAGService:
                 "message": f"Directory not found: {self.curriculum_dir}",
             }
 
+        pdf_files = list(curriculum_path.rglob("*.pdf"))
+        if not pdf_files:
+            return {
+                "status": "error",
+                "message": f"No curriculum PDFs found in: {self.curriculum_dir}",
+            }
+
+        if force_rebuild:
+            # The existing collection may contain points indexed with stale
+            # metadata. Recreate it so a forced rebuild replaces those points.
+            self._reset_collection()
+
         processed = 0
         errors = []
 
-        
-        pdf_files = list(curriculum_path.rglob("*.pdf"))
-
         for pdf_path in pdf_files:
             try:
-                
-                class_name = pdf_path.parent.name
+                # The supplied PDFs live directly under cdc_curriculum, so
+                # their parent folder is not a grade. Support numeric grade
+                # subfolders as the curriculum grows; current root PDFs are
+                # all Grade 10.
+                relative_dirs = pdf_path.relative_to(curriculum_path).parts[:-1]
+                class_name = next(
+                    (part for part in reversed(relative_dirs) if part.isdigit()),
+                    "10",
+                )
                 subject = pdf_path.stem
                 print(f"[RAG] Processing: {class_name}/{subject}")
 
@@ -170,6 +187,28 @@ class RAGService:
             "errors": errors,
             "total_chunks": self.qdrant_client.count(collection_name=COLLECTION_NAME).count,
         }
+
+    def _reset_collection(self) -> None:
+        """Replace the existing index and recreate its filtered payload indexes."""
+        self.qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
+        self.qdrant_client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=EMBEDDING_DIMENSION,
+                distance=Distance.COSINE,
+            ),
+        )
+        for field in ["class", "subject", "page_no"]:
+            try:
+                self.qdrant_client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                # A failed payload index should not hide an indexing failure;
+                # Qdrant will still be able to search without that index.
+                pass
 
     def _extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
         pages_data = []
@@ -240,7 +279,10 @@ class RAGService:
 
         points = []
         for i, chunk in enumerate(chunks):
-            point_id = hash(f"{class_name}_{subject}_{i}") % (2**63)
+            point_key = f"{class_name}_{subject}_{i}".encode("utf-8")
+            point_id = int.from_bytes(
+                hashlib.sha256(point_key).digest()[:8], "big"
+            ) & ((1 << 63) - 1)
             points.append(
                 PointStruct(
                     id=point_id,

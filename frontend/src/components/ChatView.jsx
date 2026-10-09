@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowUp,
   BookOpen,
@@ -18,7 +19,7 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { API_URL, chatAPI } from "../services/api";
 import { useAuth } from "../context/AuthContext.jsx";
-import { findSubject, SUBJECTS } from "../data/curriculum.js";
+import { findSubject } from "../data/curriculum.js";
 import MarkdownRenderer from "./MarkdownRenderer.jsx";
 import SettingsModal from "./SettingsModal.jsx";
 import noyaLogo from "../assets/noya-logo.svg";
@@ -61,7 +62,7 @@ const chatErrorMessage = (code, statusCode) => {
   return "Something went wrong while sending your question. Please try again.";
 };
 
-const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPending, onSessionCreated, theme = "dark", onToggleTheme, billingAvailable = false }) => {
+const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPending, onSessionCreated, onSessionSelected, theme = "dark", onToggleTheme, billingAvailable = false }) => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -100,7 +101,6 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
-  const [sourcesPanel, setSourcesPanel] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [limitPopup, setLimitPopup] = useState(null);
   const [limitBanner, setLimitBanner] = useState(null);
@@ -113,6 +113,20 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const sessionIdRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const dismissedLimitRef = useRef(null);
+  // Session identity is tracked in refs as well as state because the load and
+  // reset effects below must see the in-flight load synchronously, before React
+  // has committed the corresponding state updates.
+  const loadingSessionRef = useRef(null);
+  const loadedSessionRef = useRef(null);
+  const loadRequestRef = useRef(0);
+  // Marks the subject/chapter pair that loadSession() pushed into router state.
+  // That navigation is what fires the reset effect below, so the effect has to
+  // be able to tell it apart from a subject/chapter change the student made.
+  const appliedContextRef = useRef(null);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     if (!proEnabled && selectedModel.tier === "paid") {
@@ -134,11 +148,10 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
     setLimitPopup(null);
   };
 
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
-
   const isTyping = useMemo(() => messages.some((message) => message.streaming), [messages]);
+  // True while the selected chat is being fetched, so the thread can show a
+  // placeholder instead of the previous chat's messages.
+  const loadingSession = Boolean(activeLoadingSession) && activeLoadingSession === sessionId;
   const hasContext = Boolean(subjectContext || chapterContext);
 
   const scrollToBottom = useCallback(() => {
@@ -219,14 +232,35 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   }, [refreshSessions]);
 
   useEffect(() => {
-    if (externalSessionId) {
-      loadSession(externalSessionId);
-    } else {
-      resetChat({ notify: false });
+    // Follow the session App considers current, but never re-fetch what is
+    // already on screen — otherwise selecting a chat in the sidebar would echo
+    // back as a prop change and reload it a second time.
+    if (!externalSessionId) {
+      // App cleared the current session. Mirror that, but only when a session
+      // was genuinely open — otherwise this would wipe a brand-new chat, which
+      // has no session id yet.
+      if (loadedSessionRef.current) {
+        loadedSessionRef.current = null;
+        setSessionId(null);
+      }
+      return;
     }
+    if (externalSessionId === loadedSessionRef.current || externalSessionId === loadingSessionRef.current) {
+      return;
+    }
+    loadSession(externalSessionId);
   }, [externalSessionId]);
 
   useEffect(() => {
+    // A subject/chapter change starts a new conversation — except the change
+    // loadSession() just made while restoring a chat's own textbook context.
+    // Resetting on that one used to discard the messages that were only just
+    // fetched and leave the sidebar with nothing selected.
+    const contextKey = `${subjectContext || ""}\u0000${chapterContext || ""}`;
+    if (appliedContextRef.current === contextKey) {
+      appliedContextRef.current = null;
+      return;
+    }
     resetChat({ notify: false });
   }, [subjectContext, chapterContext]);
 
@@ -242,9 +276,17 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   }, [input]);
 
   const resetChat = ({ notify = true, goToSubjectSelection = false } = {}) => {
+    // Invalidate any in-flight history request so its response is discarded
+    // rather than repopulating a chat the user has already left.
+    loadRequestRef.current += 1;
+    loadingSessionRef.current = null;
+    loadedSessionRef.current = null;
+    appliedContextRef.current = null;
+    sessionIdRef.current = null;
     setMessages([]);
     setInput("");
     setSessionId(null);
+    setActiveLoadingSession(null);
     setMobileSidebarOpen(false);
     if (notify) onNewChat?.();
     if (goToSubjectSelection) navigate("/subjects");
@@ -254,6 +296,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const handleChangeChapter = (chapter) => {
     if (!chapter || !subjectContext) return;
     setMobileSidebarOpen(false);
+    // An explicit chapter choice is always a new conversation.
+    appliedContextRef.current = null;
     navigate("/chat", { state: { subject: subjectContext, chapter } });
   };
 
@@ -266,9 +310,28 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   };
 
   const loadSession = async (id) => {
+    if (!id) return;
+
+    // Claim the session synchronously: the effects above read the refs to
+    // decide whether a subject/chapter change is a reset or a session switch.
+    // Dropping any marker from an earlier load keeps a stale one from
+    // suppressing a genuine reset later on.
+    loadingSessionRef.current = id;
+    appliedContextRef.current = null;
+    loadRequestRef.current += 1;
+    const requestId = loadRequestRef.current;
+
+    // Select immediately so the row shows its active state while it loads,
+    // instead of appearing to do nothing until the response arrives.
+    setSessionId(id);
     setActiveLoadingSession(id);
+
     try {
       const session = await chatAPI.getSession(id);
+
+      // A newer click (or a new chat) landed while this request was in flight.
+      if (requestId !== loadRequestRef.current) return;
+
       const loadedMessages = [];
       session.messages?.forEach((message) => {
         loadedMessages.push({ role: "user", content: message.message });
@@ -280,7 +343,11 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       });
       setMessages(loadedMessages);
       setSessionId(session.id);
+      loadedSessionRef.current = session.id;
       setMobileSidebarOpen(false);
+      // Keep App's idea of the current session in step with the sidebar, so the
+      // two never disagree about what is open.
+      onSessionSelected?.(session.id);
 
       // Restore the session's own subject/chapter into router state.
       // The session record (kept in sync by the backend) is authoritative.
@@ -307,6 +374,8 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         restoredChapter = null;
       }
       if (restoredSubject !== subjectContext || restoredChapter !== chapterContext) {
+        // Flag this navigation as ours so the reset effect above recognises it.
+        appliedContextRef.current = `${restoredSubject || ""}\u0000${restoredChapter || ""}`;
         navigate("/chat", {
           state: restoredSubject ? { subject: restoredSubject, chapter: restoredChapter } : {},
           replace: true,
@@ -315,9 +384,17 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
 
       refreshSessions({ silent: true });
     } catch {
-      resetChat();
+      if (requestId !== loadRequestRef.current) return;
+      // Put the selection back on the chat that is actually on screen. Wiping
+      // everything because one history request failed is what used to leave
+      // the sidebar with nothing selected.
+      const stillLoadedId = loadedSessionRef.current || null;
+      setSessionId(stillLoadedId);
     } finally {
-      setActiveLoadingSession(null);
+      if (requestId === loadRequestRef.current) {
+        loadingSessionRef.current = null;
+        setActiveLoadingSession(null);
+      }
     }
   };
 
@@ -336,7 +413,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       {
         role: "assistant",
         content: "",
-        status: "Reading the lesson context",
+        status: "Thinking",
         streaming: true,
         id: streamingId,
       },
@@ -475,6 +552,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
               if (wordIndex >= words.length) {
                 if (data.session_id && !sessionIdRef.current) {
                   setSessionId(data.session_id);
+                  loadedSessionRef.current = data.session_id;
                   const optimisticSession = {
                     id: data.session_id,
                     title: data.session_title || message,
@@ -579,7 +657,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       <main className="chat-main">
         <section aria-live="polite" aria-relevant="additions" className="chat-scroll" ref={scrollContainerRef}>
           <div className="chat-thread">
-            {!messages.length && !loading && (
+            {loadingSession && <ThreadSkeleton />}
+
+            {!loadingSession && !messages.length && !loading && (
               <EmptyState
                 subjectContext={subjectContext}
                 chapterContext={chapterContext}
@@ -587,11 +667,10 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
               />
             )}
 
-            {messages.map((message, index) => (
+            {!loadingSession && messages.map((message, index) => (
               <MessageItem
                 key={`${message.role}-${index}-${message.id || ""}`}
                 message={message}
-                onOpenSources={(sourceData) => setSourcesPanel(sourceData)}
               />
             ))}
 
@@ -704,20 +783,6 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
 
         {proEnabled && !hasProAccess && <ProChatFeatures.FloatingUpgrade />}
       </main>
-      {sourcesPanel && (
-        <SourcesPanel
-          source={sourcesPanel.source}
-          subject={sourcesPanel.subject}
-          chapter={sourcesPanel.chapter}
-          startPage={sourcesPanel.startPage}
-          endPage={sourcesPanel.endPage}
-          unitTitle={sourcesPanel.unitTitle}
-          chapterTitle={sourcesPanel.chapterTitle}
-          matchedChapter={sourcesPanel.matchedChapter}
-          usedPages={sourcesPanel.usedPages}
-          onClose={() => setSourcesPanel(null)}
-        />
-      )}
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
@@ -771,14 +836,16 @@ const replaceStreamingMessage = (messages, id, replacement) => {
   if (!hasStreamingMessage) return [...messages, replacement];
   return messages.map((message) => (message.streaming && message.id === id ? replacement : message));
 };
-
+const titles=["Let's Study Together!", "I'm Ready!", "Any Doubts?", "Let's Ace that Exam."];
+const title = titles[Math.floor(Math.random()*titles.length)];
 const EmptyState = ({ subjectContext, chapterContext, onPrompt }) => (
   <div className="chat-empty">
     
     
     <div className="chat-empty-copy">
+
       {/* <span><Sparkles size={15} aria-hidden="true" /> Study workspace</span> */}
-      <h1>What should we make clear today?</h1>
+      <h1>{title}</h1>
       <p>
         {subjectContext && chapterContext
           ? `Ask about ${chapterContext}, or paste a line that feels confusing.`
@@ -824,6 +891,7 @@ const Sidebar = ({
   const [highlightPicker, setHighlightPicker] = useState(false);
   const menuRef = useRef(null);
   const avatarRef = useRef(null);
+  const popupRef = useRef(null);
   const chapterSelectRef = useRef(null);
 
   const focusChapterPicker = useCallback(() => {
@@ -833,7 +901,10 @@ const Sidebar = ({
 
   useEffect(() => {
     const handleClick = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
+      if (
+        !menuRef.current?.contains(event.target) &&
+        !popupRef.current?.contains(event.target)
+      ) {
         setMenuOpen(false);
       }
     };
@@ -971,17 +1042,27 @@ const Sidebar = ({
 
             {!sessionsLoading && !sessionsError && sessions.length > 0 && (
               <div className="chat-session-list">
-                {sessions.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => onSelectSession(item.id)}
-                    aria-current={sessionId === item.id ? "true" : undefined}
-                    className={sessionId === item.id ? "active" : ""}
-                  >
-                    <span>{item.title || item.last_message?.message || "Untitled chat"}</span>
-                    {activeLoadingSession === item.id ? <Clock3 size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-                  </button>
-                ))}
+                {sessions.map((item) => {
+                  const isSelected = sessionId === item.id;
+                  const isLoading = activeLoadingSession === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => onSelectSession(item.id)}
+                      aria-current={isSelected ? "true" : undefined}
+                      aria-busy={isLoading ? "true" : undefined}
+                      disabled={isLoading}
+                      className={`${isSelected ? "active" : ""}${isLoading ? " loading" : ""}`}
+                    >
+                      <span className="chat-session-label">
+                        {item.title || item.last_message?.message || "Untitled chat"}
+                      </span>
+                      {isLoading
+                        ? <span className="chat-session-spinner" aria-hidden="true" />
+                        : <ChevronRight size={14} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </nav>
@@ -1001,8 +1082,8 @@ const Sidebar = ({
             {!collapsed && (
               <span className="chat-user-name">{user?.username || "Guest"}</span>
             )}
-            {menuOpen && (
-              <div className="chat-user-popup" style={popupStyle}>
+            {menuOpen && createPortal(
+              <div ref={popupRef} className="chat-user-popup" style={popupStyle}>
                 <div className="chat-user-popup-header">
                   <strong>{user?.username || "Guest"}</strong>
                   <span>{user?.email || ""}</span>
@@ -1023,7 +1104,8 @@ const Sidebar = ({
                     <span>Log out</span>
                   </button>
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
         </div>
@@ -1042,7 +1124,26 @@ const SessionSkeleton = () => (
   </div>
 );
 
-const MessageItem = ({ message, onOpenSources }) => {
+// Placeholder shown in the message thread while a recent chat is fetched, so
+// opening one reads as a transition rather than a frozen screen.
+const ThreadSkeleton = () => (
+  <div className="chat-thread-skeleton" aria-label="Loading conversation" aria-busy="true">
+    {[0, 1, 2].map((group) => (
+      <div className="chat-thread-skeleton-turn" key={group}>
+        <div className="chat-thread-skeleton-bubble user">
+          <span style={{ width: `${46 + group * 9}%` }} />
+        </div>
+        <div className="chat-thread-skeleton-bubble assistant">
+          <span style={{ width: `${88 - group * 7}%` }} />
+          <span style={{ width: `${72 - group * 5}%` }} />
+          <span style={{ width: `${54 + group * 6}%` }} />
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
+const MessageItem = ({ message }) => {
   const [copied, setCopied] = useState(false);
 
   if (message.role === "user") {
@@ -1094,50 +1195,6 @@ const MessageItem = ({ message, onOpenSources }) => {
     }
   };
 
-  const source = message.source || "";
-  const hasSource = source && source !== "Error" && source !== "Deterministic Grounding Check";
-
-  const parseSource = (sourceStr) => {
-    const parts = sourceStr.split("—").map((s) => s.trim());
-    if (parts.length >= 3) {
-      return { subject: parts[1]?.toLowerCase() || "", chapter: parts[2] || "" };
-    }
-    if (parts.length === 2) {
-      return { subject: parts[0]?.toLowerCase() || "", chapter: parts[1] || "" };
-    }
-    return { subject: "", chapter: "" };
-  };
-
-  const { subject: sourceSubject, chapter: sourceChapter } = parseSource(source);
-
-  const handleOpenSources = () => {
-    const subjectObj = SUBJECTS.find((s) => s.id === sourceSubject);
-    const chapterList = subjectObj?.chapters || [];
-    const matchedChapter = chapterList.find((c) => {
-      const normalized = c.replace(/^\d+\.\s*/, "").toLowerCase();
-      return normalized === sourceChapter.toLowerCase() || sourceChapter.toLowerCase().includes(normalized);
-    });
-
-    const unitTitle = message.unit_title || "";
-    const chapterTitle = message.chapter_title || "";
-
-    const usedPages = [...new Set(
-      (message.content || "").match(/\[Page\s+(\d+)\]/g)?.map((m) => parseInt(m.match(/\d+/)?.[0], 10)) || []
-    )].sort((a, b) => a - b);
-
-    onOpenSources?.({
-      source,
-      subject: sourceSubject,
-      chapter: sourceChapter,
-      startPage: message.start_page || "",
-      endPage: message.end_page || "",
-      unitTitle,
-      chapterTitle,
-      matchedChapter,
-      usedPages,
-    });
-  };
-
   return (
     <article className="chat-message assistant">
       <div className="assistant-mark">
@@ -1155,94 +1212,9 @@ const MessageItem = ({ message, onOpenSources }) => {
             {copied ? <Check size={14} /> : <Copy size={14} />}
             {/* <span>{copied ? "Copied" : "Copy"}</span> */}
           </button>
-          {hasSource && (
-            <button
-              className="assistant-action-btn"
-              onClick={handleOpenSources}
-              title="View sources"
-              aria-label="View sources"
-            >
-              <BookOpen size={14} />
-              {/* <span>Sources</span> */}
-            </button>
-          )}
         </div>
       </div>
     </article>
-  );
-};
-
-const SourcesPanel = ({ source, subject, chapter, startPage, endPage, unitTitle, chapterTitle, matchedChapter, usedPages, onClose }) => {
-  const subjectObj = SUBJECTS.find((s) => s.id === subject);
-  const subjectName = subjectObj?.name || subject;
-  const displayChapter = matchedChapter || chapterTitle || chapter;
-  const displayPage = startPage && endPage ? `${startPage}–${endPage}` : startPage || endPage || "";
-
-  return (
-    <aside className="sources-panel">
-      <div className="sources-panel-header">
-        <div className="sources-panel-title">
-          <BookOpen size={16} />
-          <h3>Source</h3>
-        </div>
-        <button className="sources-panel-close" onClick={onClose} aria-label="Close sources">
-          <X size={15} />
-        </button>
-      </div>
-
-      <div className="sources-panel-body">
-        <div className="sources-panel-section">
-          <div className="sources-panel-row">
-            <span className="sources-panel-dot" />
-            <div className="sources-panel-field">
-              <span className="sources-panel-label">Textbook</span>
-              <span className="sources-panel-value">{subjectName} — Class 10</span>
-            </div>
-          </div>
-
-          {displayChapter && (
-            <div className="sources-panel-row">
-              <span className="sources-panel-dot" />
-              <div className="sources-panel-field">
-                <span className="sources-panel-label">Chapter</span>
-                <span className="sources-panel-value">{displayChapter}</span>
-              </div>
-            </div>
-          )}
-
-          {unitTitle && (
-            <div className="sources-panel-row">
-              <span className="sources-panel-dot" />
-              <div className="sources-panel-field">
-                <span className="sources-panel-label">Unit</span>
-                <span className="sources-panel-value">{unitTitle}</span>
-              </div>
-            </div>
-          )}
-
-          {displayPage && (
-            <div className="sources-panel-row">
-              <span className="sources-panel-dot" />
-              <div className="sources-panel-field">
-                <span className="sources-panel-label">Pages</span>
-                <span className="sources-panel-value">{displayPage}</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {usedPages?.length > 0 && (
-          <div className="sources-panel-section">
-            <span className="sources-panel-section-title">Referenced in response</span>
-            <div className="sources-panel-pages">
-              {usedPages.map((p) => (
-                <span key={p} className="sources-panel-page-tag">Pg. {p}</span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </aside>
   );
 };
 
