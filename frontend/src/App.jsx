@@ -126,8 +126,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
         <h1>Noya</h1>
         <br></br>
         <p>
-          A calm study companion that reads with you, answers from your lessons, and helps you turn confusing textbook lines into simple explanations.
-        </p>
+          An AI RAG system built for Grade 10 students following the CDC Curriculum        </p>
         <div className="hero-actions">
           <Link to="/signup" className="primary-cta">
             Start studying <ArrowRight size={18} aria-hidden="true" />
@@ -138,17 +137,12 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
     </section>
 
     <main>
-      <section className="landing-strip" aria-label="Product highlights">
-        <span>Textbook-aware answers</span>
-        <span>Chapter-by-chapter help</span>
-        <span>Clean chat workspace</span>
-        <span>Light and dark modes</span>
-      </section>
+
 
       <section id="features" className="landing-section">
         <div className="section-heading">
-          <span className="eyebrow">What it does</span>
-          <h2>Less searching. More understanding.</h2>
+          
+          <h2>Ask it, Understand it.</h2>
           <p>Noya keeps the experience centered on one thing: asking better questions and getting answers you can actually study from.</p>
         </div>
         <div className="feature-grid">
@@ -175,47 +169,10 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
         </div>
       </section>
 
-      <section className="showcase-section">
-        <div className="study-board" aria-hidden="true">
-          <div className="board-header">
-            <span>Today</span>
-            <strong>Science revision</strong>
-          </div>
-          <div className="board-row active">
-            <span>01</span>
-            <p>Explain the diagram</p>
-          </div>
-          <div className="board-row">
-            <span>02</span>
-            <p>Make a short answer</p>
-          </div>
-          <div className="board-row">
-            <span>03</span>
-            <p>Check key terms</p>
-          </div>
-          <div className="answer-sheet">
-            <Quote size={18} aria-hidden="true" />
-            <p>Start with the simple idea, then add the textbook words once the meaning is clear.</p>
-          </div>
-        </div>
-        <div className="showcase-copy">
-          <span className="eyebrow">Designed for real study sessions</span>
-          <h2>A page that feels quiet enough to think in.</h2>
-          <p>
-            The app avoids clutter and keeps the chat, subject, and chapter in view. It is made for late-night revision, quick doubt clearing, and careful reading after school.
-          </p>
-          <ul>
-            <li><CheckCircle2 size={18} aria-hidden="true" /> Clean layout with strong reading contrast.</li>
-            <li><CheckCircle2 size={18} aria-hidden="true" /> Short answers when you need speed, deeper help when you ask for it.</li>
-            <li><CheckCircle2 size={18} aria-hidden="true" /> Simple English, examples, and exam-ready phrasing.</li>
-          </ul>
-        </div>
-      </section>
-
+      
       <section id="method" className="landing-section method-section">
         <div className="section-heading">
-          <span className="eyebrow">How it helps</span>
-          <h2>A better loop for learning.</h2>
+          <h2>Clarity over qauntity</h2>
           <p>Instead of dumping information, Noya helps students move from confusion to confidence in a few clear steps.</p>
         </div>
         <div className="process-grid">
@@ -227,13 +184,12 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
 
       <section className="landing-section">
         <div className="section-heading">
-          <span className="eyebrow">Made for school work</span>
           <h2>The essentials, without extra clutter.</h2>
         </div>
         <div className="detail-grid">
           <div>
             <LibraryBig size={22} aria-hidden="true" />
-            <h3>Subject memory</h3>
+            <h3>Organized Study</h3>
             <p>Keep study conversations organized around the lesson you are actually revising.</p>
           </div>
           <div>
@@ -244,12 +200,12 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
           <div>
             <ShieldCheck size={22} aria-hidden="true" />
             <h3>No distractions</h3>
-            <p>The public page points students straight to chat, with fewer side quests and a cleaner path.</p>
+            <p>A simple UI, with Answers that goes through layers of Grounding checks</p>
           </div>
           <div>
             <GraduationCap size={22} aria-hidden="true" />
             <h3>Exam-friendly tone</h3>
-            <p>Answers can be shaped into short paragraphs, bullet points, or step-by-step reasoning.</p>
+            <p>Answers are Understandable, Solutions are simple, and Responses are readable</p>
           </div>
         </div>
       </section>
@@ -262,7 +218,6 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
 
       <section id="faq" className="landing-section faq-section">
         <div className="section-heading">
-          <span className="eyebrow">Questions</span>
           <h2>Before you begin.</h2>
         </div>
         <div className="faq-list">
@@ -271,19 +226,18 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
             <p>Yes. The product is centered on a focused study chat so students do not have to jump between extra tools.</p>
           </details>
           <details>
-            <summary>Can I ask for shorter or deeper answers?</summary>
-            <p>Yes. Ask for a quick summary, a school-style answer, examples, or a slower explanation.</p>
+            <summary>Can I ask a question from the textbook?</summary>
+            <p>Yes. Ask like: Solve Question (x) from Exercise/Lesson (y).</p>
           </details>
           <details>
-            <summary>Does it work in dark mode?</summary>
-            <p>Yes. The landing page and app shell support both light and dark themes with a calm reading palette.</p>
+            <summary>Can it help me with homework?</summary>
+            <p>Yes. Yes, Noya is capable of identifying a question from the textbook, and its solution even when procided with just a page number.</p>
           </details>
         </div>
       </section>
 
       <section className="final-cta">
-        <span className="eyebrow">Ready when you are</span>
-        <h2>Open a clean space for your next question.</h2>
+        <h2>Clear that Doubt, NOW!</h2>
         <Link to="/signup" className="primary-cta">
           Create account <ArrowRight size={18} aria-hidden="true" />
         </Link>
@@ -295,7 +249,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
         <img src={noyaLogo} alt="" />
         <span>Noya</span>
       </div>
-      <p>Focused study chat for Grade 10 students.</p>
+      <p>Made by Grade 10, Made for Grade 10</p>
       <div>
         <Link to="/login">Login</Link>
         <Link to="/signup">Sign up</Link>

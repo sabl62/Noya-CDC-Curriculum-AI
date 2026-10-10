@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   LogOut,
   Moon,
@@ -41,11 +41,42 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
   const [usage, setUsage] = useState(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState("");
+  const modalRef = useRef(null);
+  const closeButtonRef = useRef(null);
 
   useEffect(() => {
-    const handleKey = (e) => { if (e.key === "Escape") onClose(); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    const handleKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !modalRef.current) return;
+      const focusable = [...modalRef.current.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter((element) => element.getAttribute("aria-hidden") !== "true");
+      if (!focusable.length) {
+        e.preventDefault();
+        modalRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !modalRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !modalRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKey);
+    };
   }, [onClose]);
 
   useEffect(() => {
@@ -79,6 +110,22 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
     logout();
   };
 
+  const handleTabKeyDown = (event) => {
+    const tabButtons = [...event.currentTarget.querySelectorAll('[role="tab"]')];
+    const currentIndex = tabButtons.indexOf(document.activeElement);
+    if (currentIndex < 0) return;
+    let nextIndex = currentIndex;
+    if (["ArrowRight", "ArrowDown"].includes(event.key)) nextIndex = (currentIndex + 1) % tabButtons.length;
+    else if (["ArrowLeft", "ArrowUp"].includes(event.key)) nextIndex = (currentIndex - 1 + tabButtons.length) % tabButtons.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabButtons.length - 1;
+    else return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    setActiveTab(nextTab.id);
+    tabButtons[nextIndex].focus();
+  };
+
   const tabs = [
     { id: "general", label: "General" },
     ...(billingAvailable && ProSettings ? proSettingsTabs : []),
@@ -88,28 +135,37 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
 
   return (
     <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} className="settings-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <div className="settings-header">
-          <h2>Settings</h2>
-          <button className="settings-close-btn" onClick={onClose} aria-label="Close settings">
-            <X size={18} />
+          <div className="settings-heading">
+            <span className="settings-eyebrow">Your workspace</span>
+            <h2 id="settings-title">Settings</h2>
+          </div>
+          <button ref={closeButtonRef} type="button" className="settings-close-btn" onClick={onClose} aria-label="Close settings">
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
         <div className="settings-body">
-          <nav className="settings-tabs">
+          <nav className="settings-tabs" aria-label="Settings sections" role="tablist" aria-orientation="vertical" onKeyDown={handleTabKeyDown}>
             {tabs.map((tab) => (
               <button
                 key={tab.id}
+                id={`settings-tab-${tab.id}`}
+                type="button"
                 className={`settings-tab ${activeTab === tab.id ? "active" : ""}`}
                 onClick={() => setActiveTab(tab.id)}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls="settings-panel"
+                tabIndex={activeTab === tab.id ? 0 : -1}
               >
                 {tab.label}
               </button>
             ))}
           </nav>
 
-          <div className="settings-content">
+          <div className="settings-content" id="settings-panel" role="tabpanel" aria-labelledby={`settings-tab-${activeTab}`} tabIndex={0}>
             {activeTab === "general" && (
               <div className="settings-section">
                 <h3>Appearance</h3>
@@ -118,8 +174,8 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
                     <span className="settings-row-label">Theme</span>
                     <span className="settings-row-desc">Switch between light and dark mode</span>
                   </div>
-                  <button className="settings-toggle-btn" onClick={onToggleTheme}>
-                    {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+                  <button type="button" className="settings-toggle-btn" onClick={onToggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} appearance`}>
+                    {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
                     <span>{theme === "dark" ? "Light" : "Dark"}</span>
                   </button>
                 </div>
@@ -133,8 +189,10 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
                   <button
                     className={`settings-switch ${contextMemory ? "on" : ""}`}
                     onClick={handleContextMemoryToggle}
+                    type="button"
                     role="switch"
                     aria-checked={contextMemory}
+                    aria-label="Context memory"
                   >
                     <span className="settings-switch-thumb" />
                   </button>
@@ -190,8 +248,9 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
                 </div>
 
                 <div className="settings-field">
-                  <label className="settings-field-label">Username</label>
+                  <label className="settings-field-label" htmlFor="settings-username">Username</label>
                   <input
+                    id="settings-username"
                     type="text"
                     className="settings-input full"
                     value={user?.username || ""}
@@ -199,8 +258,9 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
                   />
                 </div>
                 <div className="settings-field">
-                  <label className="settings-field-label">Email</label>
+                  <label className="settings-field-label" htmlFor="settings-email">Email</label>
                   <input
+                    id="settings-email"
                     type="email"
                     className="settings-input full"
                     value={user?.email || ""}

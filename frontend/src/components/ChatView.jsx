@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUp,
@@ -42,6 +42,7 @@ const MODELS = [
 const MAX_TEXTAREA_HEIGHT = 164;
 const REQUEST_TIMEOUT_MS = 45000;
 const SESSIONS_CACHE_KEY = "noya_recent_chat_sessions";
+const RECENT_CHATS_HIDDEN_KEY = "noya_recent_chats_hidden";
 
 const chatErrorMessage = (code, statusCode) => {
   if (code === "auth_expired" || statusCode === 401) {
@@ -102,6 +103,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const [limitPopup, setLimitPopup] = useState(null);
   const [limitBanner, setLimitBanner] = useState(null);
   const [rateNotice, setRateNotice] = useState(false);
@@ -785,7 +787,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       </main>
       {settingsOpen && (
         <SettingsModal
-          onClose={() => setSettingsOpen(false)}
+          onClose={closeSettings}
           theme={theme}
           onToggleTheme={onToggleTheme}
           billingAvailable={proEnabled}
@@ -889,6 +891,13 @@ const Sidebar = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [popupStyle, setPopupStyle] = useState({});
   const [highlightPicker, setHighlightPicker] = useState(false);
+  const [recentChatsHidden, setRecentChatsHidden] = useState(() => {
+    try {
+      return localStorage.getItem(RECENT_CHATS_HIDDEN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const menuRef = useRef(null);
   const avatarRef = useRef(null);
   const popupRef = useRef(null);
@@ -898,6 +907,18 @@ const Sidebar = ({
     setHighlightPicker(true);
     setTimeout(() => setHighlightPicker(false), 1500);
   }, []);
+
+  const toggleRecentChats = () => {
+    setRecentChatsHidden((hidden) => !hidden);
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RECENT_CHATS_HIDDEN_KEY, String(recentChatsHidden));
+    } catch {
+      // Keep the toggle usable if browser storage is unavailable.
+    }
+  }, [recentChatsHidden]);
 
   useEffect(() => {
     const handleClick = (event) => {
@@ -914,52 +935,70 @@ const Sidebar = ({
     }
   }, [menuOpen]);
 
-  const computePopupPosition = useCallback(() => {
-    if (!avatarRef.current) return;
-    const rect = avatarRef.current.getBoundingClientRect();
-    const POPUP_H = 220;
-    const POPUP_W = 220;
+  useLayoutEffect(() => {
+    if (!menuOpen) return undefined;
     const gap = 10;
+    const focusFrame = window.requestAnimationFrame(() => {
+      popupRef.current?.querySelector('[role="menuitem"]')?.focus();
+    });
+    const updatePosition = () => {
+      if (!avatarRef.current || !popupRef.current) return;
+      const anchor = avatarRef.current.getBoundingClientRect();
+      const popup = popupRef.current.getBoundingClientRect();
+      const width = Math.min(popup.width || 240, window.innerWidth - gap * 2);
+      const height = Math.min(popup.height || 220, window.innerHeight - gap * 2);
+      const placeRight = collapsed && window.innerWidth - anchor.right >= width + gap;
+      const placeLeft = collapsed && !placeRight && anchor.left >= width + gap;
+      const left = placeRight
+        ? anchor.right + gap
+        : placeLeft
+          ? anchor.left - width - gap
+          : Math.max(gap, Math.min(anchor.left + (anchor.width - width) / 2, window.innerWidth - width - gap));
+      const top = anchor.top >= height + gap
+        ? anchor.top - height - gap
+        : Math.max(gap, Math.min(anchor.bottom + gap, window.innerHeight - height - gap));
+      setPopupStyle({ position: "fixed", top, left, maxHeight: `calc(100dvh - ${gap * 2}px)`, zIndex: 1000 });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [menuOpen, collapsed]);
 
-    const spaceAbove = rect.top;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceRight = window.innerWidth - rect.right;
-    const spaceLeft = rect.left;
-
-    let top, left;
-
-    // Vertical
-    if (spaceAbove >= POPUP_H + gap) {
-      top = rect.top - POPUP_H - gap;
-    } else if (spaceBelow >= POPUP_H + gap) {
-      top = rect.bottom + gap;
-    } else {
-      top = spaceAbove > spaceBelow ? rect.top - POPUP_H - gap : rect.bottom + gap;
-    }
-
-    // Horizontal
-    if (collapsed) {
-      if (spaceRight >= POPUP_W + gap) {
-        left = rect.right + gap;
-      } else if (spaceLeft >= POPUP_W + gap) {
-        left = rect.left - POPUP_W - gap;
-      } else {
-        left = rect.right + gap;
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        avatarRef.current?.focus();
+        return;
       }
-    } else {
-      left = rect.left + rect.width / 2 - POPUP_W / 2;
-      // Clamp to viewport
-      left = Math.max(gap, Math.min(left, window.innerWidth - POPUP_W - gap));
-    }
-
-    setPopupStyle({ position: "fixed", top, left, zIndex: 1000 });
-  }, [collapsed]);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        const items = [...(popupRef.current?.querySelectorAll('[role="menuitem"]') || [])];
+        if (!items.length) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(document.activeElement);
+        const nextIndex = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : (currentIndex + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        items[nextIndex].focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [menuOpen]);
 
   return (
     <aside className={`chat-sidebar ${mobileOpen ? "is-open" : ""} ${collapsed ? "is-collapsed" : ""}`}>
       <div className="chat-sidebar-inner">
         <div className="chat-sidebar-header">
-          <div className="chat-brand" onClick={onToggleCollapsed} role="button" tabIndex={0} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onToggleCollapsed(); } }}>
+          <button type="button" className="chat-brand" onClick={onToggleCollapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
             <img src={noyaLogo} alt="" />
             {!collapsed && (
               <div>
@@ -967,20 +1006,21 @@ const Sidebar = ({
                 {/* <span>Study chat</span> */}
               </div>
             )}
-          </div>
+          </button>
           <button onClick={onCloseMobile} aria-label="Close sidebar" className="chat-icon-button show-mobile">
             <PanelLeftClose size={17} aria-hidden="true" />
           </button>
         </div>
 
         <div className="chat-sidebar-actions">
-          <button onClick={onNewChat} title="New chat" className="chat-primary-action">
+          <button type="button" onClick={onNewChat} title="New chat" aria-label={collapsed ? "New chat" : undefined} className="chat-primary-action">
             <CirclePlus size={17} aria-hidden="true" />
             {!collapsed && <span>New chat</span>}
           </button>
           <button
             onClick={() => { if (collapsed) onToggleCollapsed(); else focusChapterPicker(); }}
             title="Change chapter"
+            aria-label={collapsed ? "Change chapter" : undefined}
             className={`chat-secondary-action${collapsed ? " highlight" : ""}`}
           >
             <BookOpen size={17} aria-hidden="true" />
@@ -1021,50 +1061,61 @@ const Sidebar = ({
             )}
 
             <div className="chat-history-title">
-              <span>Recent chats</span>
+              <button
+                type="button"
+                className="chat-history-toggle"
+                onClick={toggleRecentChats}
+                aria-expanded={!recentChatsHidden}
+                aria-controls="chat-session-history"
+              >
+                <span>Recent chats</span>
+                <ChevronDown size={14} aria-hidden="true" className={recentChatsHidden ? "collapsed" : ""} />
+              </button>
               {sessionsLoading && <Clock3 size={13} aria-hidden="true" />}
             </div>
 
-            {sessionsLoading && <SessionSkeleton />}
+            <div id="chat-session-history" hidden={recentChatsHidden}>
+              {sessionsLoading && <SessionSkeleton />}
 
-            {!sessionsLoading && sessionsError && (
-              <div className="chat-history-empty">
-                <p>{sessionsError}</p>
-                <button onClick={onRetrySessions}>Retry</button>
-              </div>
-            )}
+              {!sessionsLoading && sessionsError && (
+                <div className="chat-history-empty">
+                  <p>{sessionsError}</p>
+                  <button onClick={onRetrySessions}>Retry</button>
+                </div>
+              )}
 
-            {!sessionsLoading && !sessionsError && sessions.length === 0 && (
-              <div className="chat-history-empty">
-                <p>Your conversations will appear here after the first saved answer.</p>
-              </div>
-            )}
+              {!sessionsLoading && !sessionsError && sessions.length === 0 && (
+                <div className="chat-history-empty">
+                  <p>Your conversations will appear here after the first saved answer.</p>
+                </div>
+              )}
 
-            {!sessionsLoading && !sessionsError && sessions.length > 0 && (
-              <div className="chat-session-list">
-                {sessions.map((item) => {
-                  const isSelected = sessionId === item.id;
-                  const isLoading = activeLoadingSession === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => onSelectSession(item.id)}
-                      aria-current={isSelected ? "true" : undefined}
-                      aria-busy={isLoading ? "true" : undefined}
-                      disabled={isLoading}
-                      className={`${isSelected ? "active" : ""}${isLoading ? " loading" : ""}`}
-                    >
-                      <span className="chat-session-label">
-                        {item.title || item.last_message?.message || "Untitled chat"}
-                      </span>
-                      {isLoading
-                        ? <span className="chat-session-spinner" aria-hidden="true" />
-                        : <ChevronRight size={14} aria-hidden="true" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+              {!sessionsLoading && !sessionsError && sessions.length > 0 && (
+                <div className="chat-session-list">
+                  {sessions.map((item) => {
+                    const isSelected = sessionId === item.id;
+                    const isLoading = activeLoadingSession === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => onSelectSession(item.id)}
+                        aria-current={isSelected ? "true" : undefined}
+                        aria-busy={isLoading ? "true" : undefined}
+                        disabled={isLoading}
+                        className={`${isSelected ? "active" : ""}${isLoading ? " loading" : ""}`}
+                      >
+                        <span className="chat-session-label">
+                          {item.title || item.last_message?.message || "Untitled chat"}
+                        </span>
+                        {isLoading
+                          ? <span className="chat-session-spinner" aria-hidden="true" />
+                          : <ChevronRight size={14} aria-hidden="true" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </nav>
         )}
 
@@ -1073,9 +1124,18 @@ const Sidebar = ({
             <button
               ref={avatarRef}
               className="chat-user-avatar-btn"
-              onClick={() => { computePopupPosition(); setMenuOpen((v) => !v); }}
-              aria-label="User menu"
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label={`Account menu for ${user?.username || "Guest"}`}
+              title="Account menu"
               aria-expanded={menuOpen}
+              aria-haspopup="menu"
+              aria-controls={menuOpen ? "chat-user-popup" : undefined}
+              onKeyDown={(event) => {
+                if ((event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") && !menuOpen) {
+                  event.preventDefault();
+                  setMenuOpen(true);
+                }
+              }}
             >
               <UserRound size={18} aria-hidden="true" />
             </button>
@@ -1083,7 +1143,7 @@ const Sidebar = ({
               <span className="chat-user-name">{user?.username || "Guest"}</span>
             )}
             {menuOpen && createPortal(
-              <div ref={popupRef} className="chat-user-popup" style={popupStyle}>
+              <div id="chat-user-popup" ref={popupRef} className="chat-user-popup" style={popupStyle} role="menu" aria-label="Account menu">
                 <div className="chat-user-popup-header">
                   <strong>{user?.username || "Guest"}</strong>
                   <span>{user?.email || ""}</span>
@@ -1095,11 +1155,11 @@ const Sidebar = ({
                 )}
                 <div className="chat-user-popup-actions">
                   {proEnabled && !hasProAccess && <ProChatFeatures.UserMenuUpgrade />}
-                  <button onClick={() => { setMenuOpen(false); onOpenSettings?.(); }} className="chat-popup-btn">
+                  <button role="menuitem" onClick={() => { setMenuOpen(false); onOpenSettings?.(); }} className="chat-popup-btn">
                     <Settings size={15} aria-hidden="true" />
                     <span>Settings</span>
                   </button>
-                  <button onClick={onLogout} className="chat-popup-btn danger">
+                  <button role="menuitem" onClick={onLogout} className="chat-popup-btn danger">
                     <LogOut size={15} aria-hidden="true" />
                     <span>Log out</span>
                   </button>
@@ -1127,19 +1187,16 @@ const SessionSkeleton = () => (
 // Placeholder shown in the message thread while a recent chat is fetched, so
 // opening one reads as a transition rather than a frozen screen.
 const ThreadSkeleton = () => (
-  <div className="chat-thread-skeleton" aria-label="Loading conversation" aria-busy="true">
-    {[0, 1, 2].map((group) => (
-      <div className="chat-thread-skeleton-turn" key={group}>
-        <div className="chat-thread-skeleton-bubble user">
-          <span style={{ width: `${46 + group * 9}%` }} />
-        </div>
-        <div className="chat-thread-skeleton-bubble assistant">
-          <span style={{ width: `${88 - group * 7}%` }} />
-          <span style={{ width: `${72 - group * 5}%` }} />
-          <span style={{ width: `${54 + group * 6}%` }} />
-        </div>
-      </div>
-    ))}
+  <div className="chat-thread-skeleton" role="status" aria-label="Loading conversation" aria-busy="true">
+    <span className="sr-only">Loading conversation</span>
+    <div className="chat-skeleton-user" aria-hidden="true">
+      <span className="chat-skeleton-line" />
+    </div>
+    <div className="chat-skeleton-answer" aria-hidden="true">
+      <span className="chat-skeleton-line long" />
+      <span className="chat-skeleton-line medium" />
+      <span className="chat-skeleton-line short" />
+    </div>
   </div>
 );
 
