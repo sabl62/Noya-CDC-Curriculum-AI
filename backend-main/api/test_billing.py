@@ -4,14 +4,21 @@ import hmac
 import json
 import os
 from decimal import Decimal
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import Payment, User
+from .features import billing_enabled
+from .models import User
 from .payment_gateways import EsewaGateway, PaymentGatewayError
+
+if billing_enabled():
+    from .models import Payment
+else:
+    Payment = None
 
 
 def esewa_expected_signature(message: str, secret: str) -> str:
@@ -82,6 +89,7 @@ class EsewaSignatureTests(TestCase):
             EsewaGateway.decode_callback('not-valid-base64-json!!!')
 
 
+@skipUnless(billing_enabled(), 'Pro billing modules are not included in this checkout.')
 class BillingCheckoutTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='payer', password='pw')
@@ -157,6 +165,7 @@ class BillingCheckoutTests(TestCase):
         self.assertIn(res.status_code, (401, 403))
 
 
+@skipUnless(billing_enabled(), 'Pro billing modules are not included in this checkout.')
 class BillingVerifyTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='verifier', password='pw')

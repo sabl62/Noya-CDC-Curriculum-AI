@@ -8,12 +8,14 @@ default twice.
 import json
 import os
 from datetime import timedelta
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from .features import billing_enabled
 from .models import UsageCounter, User
 from .usage_limits import (
     DEFAULT_RATE_LIMIT,
@@ -67,10 +69,15 @@ class FakeChatService:
 class PlanLimitTests(TestCase):
     def test_default_free_and_paid_numbers(self):
         self.assertEqual(plan_limits('free'), {'plan': 'free', 'daily': 15, 'monthly': 300})
-        self.assertEqual(plan_limits('paid'), {'plan': 'paid', 'daily': 150, 'monthly': 1000})
+        paid_limits = (
+            {'plan': 'paid', 'daily': 150, 'monthly': 1000}
+            if billing_enabled()
+            else {'plan': 'free', 'daily': 15, 'monthly': 300}
+        )
+        self.assertEqual(plan_limits('paid'), paid_limits)
 
     def test_plan_normalization(self):
-        self.assertEqual(normalize_plan('Paid'), 'paid')
+        self.assertEqual(normalize_plan('Paid'), 'paid' if billing_enabled() else 'free')
         self.assertEqual(normalize_plan(' pro '), 'free')
         self.assertEqual(normalize_plan(None), 'free')
         self.assertEqual(plan_limits(None)['plan'], 'free')
@@ -153,6 +160,7 @@ class DailyQuotaTests(ChatLimitTestCase):
         self.assertEqual(payload['limit_type'], 'daily')
         self.assertEqual(payload['plan'], 'free')
 
+    @skipUnless(billing_enabled(), 'Paid plan limits require the optional Pro billing modules.')
     @with_env(USAGE_PAID_DAILY_LIMIT='2', USAGE_RATE_LIMIT_PER_MINUTE='50')
     def test_paid_user_uses_paid_limits(self):
         self.user.plan_tier = 'paid'
@@ -261,6 +269,7 @@ class CountingRulesTests(ChatLimitTestCase):
 
         self.assertEqual(self.counter().daily_count, 1)
 
+    @skipUnless(billing_enabled(), 'Paid plan limits require the optional Pro billing modules.')
     @with_env(USAGE_FREE_DAILY_LIMIT='1', USAGE_PAID_DAILY_LIMIT='3',
               USAGE_RATE_LIMIT_PER_MINUTE='50')
     def test_counters_are_isolated_per_user(self):

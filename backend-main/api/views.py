@@ -386,11 +386,12 @@ class ChatView(APIView):
                                     session.save()
 
                         # Yield final event with session metadata
-                        yield f"data: {json.dumps({
+                        event_with_session = {
                             **event,
                             'session_id': session.id if session else None,
                             'session_title': session.title if session else None
-                        })}\n\n"
+                        }
+                        yield f"data: {json.dumps(event_with_session)}\n\n"
                     else:
                         yield f"data: {json.dumps(event)}\n\n"
 

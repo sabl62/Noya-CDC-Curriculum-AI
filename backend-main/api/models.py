@@ -6,6 +6,20 @@ try:
     from .pro_models import BillingFields, Payment
 except ImportError:
     class BillingFields(models.Model):
+        # The billing implementation is optional, but these fields remain in
+        # the migration history. Keep the core user model aligned with that
+        # schema when the Pro modules are not included in a checkout.
+        plan_tier = models.CharField(
+            max_length=20,
+            choices=[("free", "Free"), ("paid", "Paid")],
+            default="free",
+        )
+        billing_provider = models.CharField(max_length=40, blank=True, default="")
+        billing_customer_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+        billing_subscription_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+        billing_status = models.CharField(max_length=32, blank=True, default="inactive", db_index=True)
+        billing_expires_at = models.DateTimeField(null=True, blank=True)
+
         class Meta:
             abstract = True
 
