@@ -231,7 +231,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
           </details>
           <details>
             <summary>Can it help me with homework?</summary>
-            <p>Yes. Yes, Noya is capable of identifying a question from the textbook, and its solution even when procided with just a page number.</p>
+            <p>Yes, Noya is capable of identifying a question from the textbook, and its solution even when provided with just a page number.</p>
           </details>
         </div>
       </section>

@@ -70,6 +70,8 @@ _STUDY_TERMS = {
 
 _GEMINI_FREE_MODEL = "gemini-2.5-flash"
 
+_TABLE_FORMATTING_INSTRUCTIONS = """TABLES (Markdown pipe tables): Use a table when the student asks for one or when a compact comparison, classification, vocabulary set, timeline, or parallel facts/formulas will make the answer easier to scan or memorize. Use tables only when the information naturally fits rows and columns; prefer prose or lists for short answers, sequential steps, proofs, and long explanations. Write one row per line with unescaped | separators, a clear header, and a separator row. Keep tables to 2–4 columns with concise cell text. Put a blank line before and after each table. Do not put paragraphs or multi-step reasoning in cells, or repeat the whole table in prose."""
+
 _INVALID_RESPONSE_MARKERS = [
     "name '", "is not defined", "traceback", "syntaxerror",
     "typeerror", "indexerror", "keyerror", "attributeerror",
@@ -955,6 +957,8 @@ FORMATTING RULES:
 - Use **bold** for key terms, formulas, and important results
 - For math solutions, write like a student writes in their notebook: clean, short steps with minimal words
 
+{_TABLE_FORMATTING_INSTRUCTIONS}
+
 {_LATEX_MATH_INSTRUCTIONS}"""
                 user_prompt = f"""Student Question: {message}
 
@@ -1049,6 +1053,8 @@ FORMATTING RULES:
 - Keep paragraphs SHORT — 1-2 sentences max
 - Use **bold** for key terms, formulas, and important results
 - For math solutions, write like a student writes in their notebook: clean, short steps with minimal words
+
+{_TABLE_FORMATTING_INSTRUCTIONS}
 
 SOLUTION STYLE RULES:
 - Write at Grade 10 level. Use simple, everyday English. No fancy vocabulary.

@@ -370,6 +370,119 @@ const TableCell = ({ children }) => <td className="px-3.5 py-2 text-[var(--ink-s
 
 const HorizontalRule = () => <hr className="my-4 border-t border-[var(--border)]" />;
 
+// Parse the compact pipe-table syntax used by the assistant into standard
+// Markdown table nodes, without pulling in a second Markdown parser.
+const remarkPipeTables = () => (tree) => {
+  const parseCells = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.includes("|")) return null;
+
+    const cells = [];
+    let cell = "";
+    for (let index = 0; index < trimmed.length; index += 1) {
+      const character = trimmed[index];
+      if (character === "\\" && trimmed[index + 1] === "|") {
+        cell += "|";
+        index += 1;
+      } else if (character === "|") {
+        cells.push(cell.trim());
+        cell = "";
+      } else {
+        cell += character;
+      }
+    }
+    cells.push(cell.trim());
+
+    if (trimmed.startsWith("|")) cells.shift();
+    if (trimmed.endsWith("|") && !trimmed.endsWith("\\|")) cells.pop();
+    return cells;
+  };
+
+  const parseInline = (value) => {
+    const children = [];
+    const tokenPattern = /(\$[^$\n]+\$|\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/g;
+    let previousIndex = 0;
+
+    for (const match of value.matchAll(tokenPattern)) {
+      if (match.index > previousIndex) children.push({ type: "text", value: value.slice(previousIndex, match.index) });
+      const token = match[0];
+      if (token.startsWith("$")) children.push({ type: "inlineMath", value: token.slice(1, -1) });
+      else if (token.startsWith("**")) children.push({ type: "strong", children: parseInline(token.slice(2, -2)) });
+      else if (token.startsWith("`")) children.push({ type: "inlineCode", value: token.slice(1, -1) });
+      else children.push({ type: "emphasis", children: parseInline(token.slice(1, -1)) });
+      previousIndex = match.index + token.length;
+    }
+
+    if (previousIndex < value.length) children.push({ type: "text", value: value.slice(previousIndex) });
+    return children.length ? children : [{ type: "text", value: "" }];
+  };
+  const cellNode = (value) => ({ type: "tableCell", children: parseInline(value) });
+  const rowNode = (cells) => ({ type: "tableRow", children: cells.map(cellNode) });
+  const serializeInline = (node) => {
+    if (node.type === "text") return node.value;
+    if (node.type === "inlineMath") return `$${node.value}$`;
+    if (node.type === "inlineCode") return `\`${node.value}\``;
+    if (node.type === "strong") return `**${node.children.map(serializeInline).join("")}**`;
+    if (node.type === "emphasis") return `*${node.children.map(serializeInline).join("")}*`;
+    if (node.type === "delete") return `~~${node.children.map(serializeInline).join("")}~~`;
+    return null;
+  };
+
+  const transform = (parent) => {
+    if (!parent.children) return;
+
+    const nextChildren = [];
+    for (const node of parent.children) {
+      transform(node);
+      if (node.type !== "paragraph" || !node.children?.length) {
+        nextChildren.push(node);
+        continue;
+      }
+
+      const paragraphText = node.children.map(serializeInline);
+      if (paragraphText.some((part) => part === null)) {
+        nextChildren.push(node);
+        continue;
+      }
+      const lines = paragraphText.join("").split("\n");
+      let start = 0;
+      let cursor = 0;
+      while (cursor < lines.length - 1) {
+        const headers = parseCells(lines[cursor]);
+        const separators = parseCells(lines[cursor + 1]);
+        if (!headers?.length || headers.length !== separators?.length || !separators.every((cell) => /^:?-{1,}:?$/.test(cell))) {
+          cursor += 1;
+          continue;
+        }
+
+        if (cursor > start) {
+          nextChildren.push({ type: "paragraph", children: [{ type: "text", value: lines.slice(start, cursor).join("\n") }] });
+        }
+
+        const rows = [rowNode(headers)];
+        cursor += 2;
+        while (cursor < lines.length) {
+          const cells = parseCells(lines[cursor]);
+          if (!cells || cells.length !== headers.length) break;
+          rows.push(rowNode(cells));
+          cursor += 1;
+        }
+        nextChildren.push({ type: "table", align: headers.map(() => null), children: rows });
+        start = cursor;
+      }
+
+      if (start === 0) {
+        nextChildren.push(node);
+      } else if (start < lines.length) {
+        nextChildren.push({ type: "paragraph", children: [{ type: "text", value: lines.slice(start).join("\n") }] });
+      }
+    }
+    parent.children = nextChildren;
+  };
+
+  transform(tree);
+};
+
 const normalizeContent = (content) => {
   if (!content) return "";
 
@@ -408,7 +521,15 @@ const normalizeContent = (content) => {
       return `[${term.trim()}](hardword://${encodeURIComponent(details.trim())})`;
     });
 
-  return result;
+  // Recover compact one-line tables from older model output that escaped
+  // pipes and joined rows with "| |". Leave fenced examples untouched.
+  return result.split(/(```[\s\S]*?```)/g).map((block) => {
+    if (block.startsWith("```")) return block;
+    return block.split("\n").map((line) => {
+      if (!line.includes("\\|") || !/\|\s*:?-{1,}/.test(line.replace(/\\\|/g, "|"))) return line;
+      return line.replace(/\\\|/g, "|").replace(/\|\s*\|/g, "|\n|");
+    }).join("\n");
+  }).join("");
 };
 
 const MarkdownRenderer = ({ content, className = "", onQuestionClick }) => {
@@ -419,7 +540,7 @@ const MarkdownRenderer = ({ content, className = "", onQuestionClick }) => {
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkMath]}
+        remarkPlugins={[remarkPipeTables, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
         components={{
           code: ({ className, children }) => {

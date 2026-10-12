@@ -1103,6 +1103,7 @@ const Sidebar = ({
                         aria-busy={isLoading ? "true" : undefined}
                         disabled={isLoading}
                         className={`${isSelected ? "active" : ""}${isLoading ? " loading" : ""}`}
+                        title={item.title || item.last_message?.message || "Unititled chat"}
                       >
                         <span className="chat-session-label">
                           {item.title || item.last_message?.message || "Untitled chat"}

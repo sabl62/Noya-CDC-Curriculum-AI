@@ -138,7 +138,7 @@ const SettingsModal = ({ onClose, theme, onToggleTheme, billingAvailable = false
       <div ref={modalRef} className="settings-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <div className="settings-header">
           <div className="settings-heading">
-            <span className="settings-eyebrow">Your workspace</span>
+            
             <h2 id="settings-title">Settings</h2>
           </div>
           <button ref={closeButtonRef} type="button" className="settings-close-btn" onClick={onClose} aria-label="Close settings">
