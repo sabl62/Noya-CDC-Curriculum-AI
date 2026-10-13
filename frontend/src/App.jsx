@@ -123,16 +123,20 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
           <Sparkles size={16} aria-hidden="true" />
           <span>Built for focused Grade 10 study</span>
         </div> */}
-        <h1>Noya</h1>
-        <br></br>
-        <p>
-          An AI RAG system built for Grade 10 students following the CDC Curriculum        </p>
-        <div className="hero-actions">
-          <Link to="/signup" className="primary-cta">
-            Start studying <ArrowRight size={18} aria-hidden="true" />
-          </Link>
-          <Link to="/login" className="secondary-cta">Log In</Link>
+        <div className="hero-copy-main">
+          <h1>Noya</h1>
+          <br></br>
+          <p>
+            An AI RAG system built for Grade 10 students following the CDC Curriculum
+          </p>
+          <div className="hero-actions">
+            <Link to="/signup" className="primary-cta">
+              Start studying <ArrowRight size={18} aria-hidden="true" />
+            </Link>
+            <Link to="/login" className="secondary-cta">Log In</Link>
+          </div>
         </div>
+        <img src={noyaLogo} alt="" aria-hidden="true" className="hero-mark" />
       </div>
     </section>
 
@@ -142,7 +146,7 @@ const PublicShell = ({ theme = "dark", onToggleTheme }) => (
       <section id="features" className="landing-section">
         <div className="section-heading">
           
-          <h2>Ask it, Understand it.</h2>
+          <h2>Ask it, Get it.</h2>
           <p>Noya keeps the experience centered on one thing: asking better questions and getting answers you can actually study from.</p>
         </div>
         <div className="feature-grid">

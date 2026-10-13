@@ -40,7 +40,8 @@ const MODELS = [
 ];
 
 const MAX_TEXTAREA_HEIGHT = 164;
-const REQUEST_TIMEOUT_MS = 45000;
+// Allow time for curriculum retrieval and the backend's provider fallbacks.
+const REQUEST_TIMEOUT_MS = 180000;
 const SESSIONS_CACHE_KEY = "noya_recent_chat_sessions";
 const RECENT_CHATS_HIDDEN_KEY = "noya_recent_chats_hidden";
 
@@ -512,83 +513,108 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let receivedTerminalEvent = false;
+
+      const handleStreamLine = (line) => {
+        if (!line.startsWith("data: ")) return;
+        const data = JSON.parse(line.slice(6));
+
+        if (data.type === "status") {
+          setMessages((previous) => updateStreamingMessage(previous, streamingId, { status: data.message }));
+        }
+
+        if (data.type === "complete") {
+          receivedTerminalEvent = true;
+          const fullContent = data.response || "I could not generate a response right now.";
+          const words = fullContent.split(" ");
+          const batchSize = 4;
+          let wordIndex = 0;
+
+          const revealNext = () => {
+            const nextIndex = Math.min(wordIndex + batchSize, words.length);
+
+            setMessages((previous) =>
+              replaceStreamingMessage(previous, streamingId, {
+                role: "assistant",
+                content: words.slice(0, nextIndex).join(" "),
+                source: data.source,
+                streaming: nextIndex < words.length,
+                status: null,
+                id: streamingId,
+              })
+            );
+
+            wordIndex = nextIndex;
+
+            if (wordIndex >= words.length) {
+              if (data.session_id && !sessionIdRef.current) {
+                setSessionId(data.session_id);
+                loadedSessionRef.current = data.session_id;
+                const optimisticSession = {
+                  id: data.session_id,
+                  title: data.session_title || message,
+                  language: "english",
+                  updated_at: new Date().toISOString(),
+                };
+                setSessions((previous) => {
+                  const nextSessions = [optimisticSession, ...previous.filter((item) => item.id !== data.session_id)];
+                  localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(nextSessions.slice(0, 30)));
+                  return nextSessions;
+                });
+                onSessionCreated?.(data.session_id, optimisticSession);
+              }
+              return;
+            }
+
+            revealTimerRef.current = setTimeout(revealNext, 25);
+          };
+
+          revealNext();
+        }
+
+        if (data.type === "error") {
+          receivedTerminalEvent = true;
+          setMessages((previous) =>
+            replaceStreamingMessage(previous, streamingId, {
+              role: "assistant",
+              content: chatErrorMessage(data.error_code),
+              streaming: false,
+              status: null,
+              id: streamingId,
+            })
+          );
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          buffer += decoder.decode();
+          if (buffer.trim()) handleStreamLine(buffer.trim());
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop();
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = JSON.parse(line.slice(6));
-
-          if (data.type === "status") {
-            setMessages((previous) => updateStreamingMessage(previous, streamingId, { status: data.message }));
-          }
-
-          if (data.type === "complete") {
-            const fullContent = data.response || "I could not generate a response right now.";
-            const words = fullContent.split(" ");
-            const batchSize = 4;
-            let wordIndex = 0;
-
-            const revealNext = () => {
-              const nextIndex = Math.min(wordIndex + batchSize, words.length);
-
-              setMessages((previous) =>
-                replaceStreamingMessage(previous, streamingId, {
-                  role: "assistant",
-                  content: words.slice(0, nextIndex).join(" "),
-                  source: data.source,
-                  streaming: nextIndex < words.length,
-                  status: null,
-                  id: streamingId,
-                })
-              );
-
-              wordIndex = nextIndex;
-
-              if (wordIndex >= words.length) {
-                if (data.session_id && !sessionIdRef.current) {
-                  setSessionId(data.session_id);
-                  loadedSessionRef.current = data.session_id;
-                  const optimisticSession = {
-                    id: data.session_id,
-                    title: data.session_title || message,
-                    language: "english",
-                    updated_at: new Date().toISOString(),
-                  };
-                  setSessions((previous) => {
-                    const nextSessions = [optimisticSession, ...previous.filter((item) => item.id !== data.session_id)];
-                    localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(nextSessions.slice(0, 30)));
-                    return nextSessions;
-                  });
-                  onSessionCreated?.(data.session_id, optimisticSession);
-                }
-                return;
-              }
-
-              revealTimerRef.current = setTimeout(revealNext, 25);
-            };
-
-            revealNext();
-          }
-
-          if (data.type === "error") {
-            setMessages((previous) =>
-              replaceStreamingMessage(previous, streamingId, {
-                role: "assistant",
-                content: chatErrorMessage(data.error_code),
-                streaming: false,
-                status: null,
-                id: streamingId,
-              })
-            );
-          }
+        lines.forEach(handleStreamLine);
+        if (receivedTerminalEvent) {
+          await reader.cancel().catch(() => {});
+          break;
         }
+      }
+
+      if (!receivedTerminalEvent) {
+        setMessages((previous) =>
+          replaceStreamingMessage(previous, streamingId, {
+            role: "assistant",
+            content: "Noya's response stream ended before the answer was complete. Please try again.",
+            streaming: false,
+            status: null,
+            id: streamingId,
+          })
+        );
       }
 
       // A delivered answer means any earlier quota/rate notice no longer applies.

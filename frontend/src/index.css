@@ -175,6 +175,10 @@ body {
   z-index: 2;
 }
 
+.hero-mark {
+  display: none;
+}
+
 .hero-copy h1 {
   color: var(--hero-ink);
   font-family: var(--font-display);
@@ -1858,6 +1862,21 @@ html.dark .chat-user-avatar-btn {
 
   .hide-mobile {
     display: inline-flex;
+  }
+}
+
+@media (min-width: 901px) {
+  .hero-copy {
+    align-items: center;
+    display: grid;
+    gap: clamp(2rem, 5vw, 5.5rem);
+    grid-template-columns: minmax(0, 1.15fr) minmax(12rem, 0.7fr);
+  }
+
+  .hero-mark {
+    display: block;
+    justify-self: end;
+    width: clamp(12rem, 22vw, 18rem);
   }
 }
 

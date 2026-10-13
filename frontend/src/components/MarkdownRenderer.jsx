@@ -522,13 +522,64 @@ const normalizeContent = (content) => {
     });
 
   // Recover compact one-line tables from older model output that escaped
-  // pipes and joined rows with "| |". Leave fenced examples untouched.
+  // pipes and joined rows with "| |". Also repair two-column tables that
+  // omit the required Markdown separator row. Leave fenced examples untouched.
   return result.split(/(```[\s\S]*?```)/g).map((block) => {
     if (block.startsWith("```")) return block;
-    return block.split("\n").map((line) => {
+    const lines = block.split("\n").map((line) => {
       if (!line.includes("\\|") || !/\|\s*:?-{1,}/.test(line.replace(/\\\|/g, "|"))) return line;
       return line.replace(/\\\|/g, "|").replace(/\|\s*\|/g, "|\n|");
-    }).join("\n");
+    }).join("\n").split("\n").map((line) => {
+      const trimmed = line.trim();
+      if (!/^\\?\|/.test(trimmed)) return line;
+      return trimmed
+        .replace(/^\\(?=\|)/, "")
+        .replace(/\\\s*$/, "");
+    });
+
+    const getCells = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("|")) return null;
+      const cells = [];
+      let cell = "";
+      for (let cellIndex = 0; cellIndex < trimmed.length; cellIndex += 1) {
+        const character = trimmed[cellIndex];
+        if (character === "\\" && trimmed[cellIndex + 1] === "|") {
+          cell += "|";
+          cellIndex += 1;
+        } else if (character === "|") {
+          cells.push(cell.trim());
+          cell = "";
+        } else {
+          cell += character;
+        }
+      }
+      cells.push(cell.trim());
+      if (trimmed.startsWith("|")) cells.shift();
+      if (trimmed.endsWith("|") && !trimmed.endsWith("\\|")) cells.pop();
+      return cells;
+    };
+    const isSeparator = (cells) => cells?.length > 0 && cells.every((cell) => /^:?-{1,}:?$/.test(cell));
+    const repaired = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const headerCells = getCells(lines[index]);
+      const nextCells = getCells(lines[index + 1] || "");
+      const previousCells = getCells(lines[index - 1] || "");
+      if (
+        headerCells?.length > 1 &&
+        nextCells?.length === headerCells.length &&
+        !previousCells &&
+        !isSeparator(nextCells)
+      ) {
+        repaired.push(lines[index]);
+        repaired.push(`| ${headerCells.map(() => "---").join(" | ")} |`);
+      } else {
+        repaired.push(lines[index]);
+      }
+    }
+
+    return repaired.join("\n");
   }).join("");
 };
 

@@ -371,19 +371,14 @@ class ChatView(APIView):
                             )
 
                             if session:
-                                # Only name a session once. The title stays a
-                                # placeholder until the model replaces it, and a
-                                # title that survives a failed generation must not
-                                # be retried on every later message.
+                                # Name a session once, without waiting on a
+                                # separate model call for cosmetic metadata.
                                 if is_placeholder_session_title(session.title) and message:
-                                    try:
-                                        new_title = service.generate_title(message)
-                                        if new_title:
-                                            session.title = clamp_session_title(new_title)
-                                    except Exception as e:
-                                        logger.warning("Title generation failed: %s", e)
-                                        session.title = clamp_session_title(message, fallback='New Chat')
-                                    session.save()
+                                    # A cosmetic title call must not delay the
+                                    # answer event. Use the student's first
+                                    # message as the immediate session title.
+                                    session.title = clamp_session_title(message, fallback='New Chat')
+                                    session.save(update_fields=['title', 'updated_at'])
 
                         # Yield final event with session metadata
                         event_with_session = {
