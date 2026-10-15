@@ -108,11 +108,13 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const [limitPopup, setLimitPopup] = useState(null);
   const [limitBanner, setLimitBanner] = useState(null);
   const [rateNotice, setRateNotice] = useState(false);
+  const [promptMenuOpen, setPromptMenuOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const modelDropdownRef = useRef(null);
   const revealTimerRef = useRef(null);
+  const promptMenuCloseTimerRef = useRef(null);
   const sessionIdRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const dismissedLimitRef = useRef(null);
@@ -152,6 +154,15 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   };
 
   const isTyping = useMemo(() => messages.some((message) => message.streaming), [messages]);
+  const sessionPrompts = useMemo(() => messages.reduce((prompts, message, index) => {
+    if (message.role === "user") {
+      prompts.push({
+        anchorId: `chat-prompt-${index}`,
+        content: typeof message.content === "string" ? message.content : String(message.content || ""),
+      });
+    }
+    return prompts;
+  }, []), [messages]);
   // True while the selected chat is being fetched, so the thread can show a
   // placeholder instead of the previous chat's messages.
   const loadingSession = Boolean(activeLoadingSession) && activeLoadingSession === sessionId;
@@ -160,6 +171,23 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     setIsNearBottom(true);
+  }, []);
+
+  const scrollToPrompt = useCallback((anchorId) => {
+    const prompt = document.getElementById(anchorId);
+    prompt?.scrollIntoView({ behavior: "smooth", block: "center" });
+    prompt?.focus({ preventScroll: true });
+    setPromptMenuOpen(false);
+  }, []);
+
+  const openPromptMenu = useCallback(() => {
+    clearTimeout(promptMenuCloseTimerRef.current);
+    setPromptMenuOpen(true);
+  }, []);
+
+  const schedulePromptMenuClose = useCallback(() => {
+    clearTimeout(promptMenuCloseTimerRef.current);
+    promptMenuCloseTimerRef.current = setTimeout(() => setPromptMenuOpen(false), 180);
   }, []);
 
   useEffect(() => {
@@ -268,7 +296,10 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
   }, [subjectContext, chapterContext]);
 
   useEffect(() => {
-    return () => clearTimeout(revealTimerRef.current);
+    return () => {
+      clearTimeout(revealTimerRef.current);
+      clearTimeout(promptMenuCloseTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -287,6 +318,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
     appliedContextRef.current = null;
     sessionIdRef.current = null;
     setMessages([]);
+    setPromptMenuOpen(false);
     setInput("");
     setSessionId(null);
     setActiveLoadingSession(null);
@@ -321,6 +353,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
     // suppressing a genuine reset later on.
     loadingSessionRef.current = id;
     appliedContextRef.current = null;
+    setPromptMenuOpen(false);
     loadRequestRef.current += 1;
     const requestId = loadRequestRef.current;
 
@@ -417,6 +450,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         role: "assistant",
         content: "",
         status: "Thinking",
+        mascotStage: "beginning",
         streaming: true,
         id: streamingId,
       },
@@ -520,14 +554,19 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
         const data = JSON.parse(line.slice(6));
 
         if (data.type === "status") {
-          setMessages((previous) => updateStreamingMessage(previous, streamingId, { status: data.message }));
+          setMessages((previous) => updateStreamingMessage(previous, streamingId, {
+            status: data.message,
+            mascotStage: data.stage,
+          }));
         }
 
         if (data.type === "complete") {
           receivedTerminalEvent = true;
           const fullContent = data.response || "I could not generate a response right now.";
           const words = fullContent.split(" ");
-          const batchSize = 4;
+          // Keep the preview short even for long math answers so a large
+          // response cannot leave the composer in its typing state for ages.
+          const batchSize = Math.max(4, Math.ceil(words.length / 32));
           let wordIndex = 0;
 
           const revealNext = () => {
@@ -538,6 +577,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
                 role: "assistant",
                 content: words.slice(0, nextIndex).join(" "),
                 source: data.source,
+                mascotStage: "hidden",
                 streaming: nextIndex < words.length,
                 status: null,
                 id: streamingId,
@@ -569,7 +609,22 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
             revealTimerRef.current = setTimeout(revealNext, 25);
           };
 
-          revealNext();
+          setMessages((previous) => updateStreamingMessage(previous, streamingId, {
+            status: "Almost there",
+            mascotStage: "almost",
+          }));
+          revealTimerRef.current = setTimeout(() => {
+            setMessages((previous) => updateStreamingMessage(previous, streamingId, {
+              mascotStage: "leaving",
+            }));
+            revealTimerRef.current = setTimeout(() => {
+              setMessages((previous) => updateStreamingMessage(previous, streamingId, {
+                mascotStage: "hidden",
+                status: "",
+              }));
+              revealNext();
+            }, 420);
+          }, 360);
         }
 
         if (data.type === "error") {
@@ -683,7 +738,12 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
       )}
 
       <main className="chat-main">
-        <section aria-live="polite" aria-relevant="additions" className="chat-scroll" ref={scrollContainerRef}>
+        <section
+          aria-live="polite"
+          aria-relevant="additions"
+          className={`chat-scroll${sessionPrompts.length ? " has-prompt-rail" : ""}`}
+          ref={scrollContainerRef}
+        >
           <div className="chat-thread">
             {loadingSession && <ThreadSkeleton />}
 
@@ -699,12 +759,82 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
               <MessageItem
                 key={`${message.role}-${index}-${message.id || ""}`}
                 message={message}
+                anchorId={message.role === "user" ? `chat-prompt-${index}` : undefined}
               />
             ))}
 
             <div ref={messagesEndRef} />
           </div>
         </section>
+
+        {!loadingSession && sessionPrompts.length > 0 && (
+          <aside
+            className={`chat-prompt-rail${promptMenuOpen ? " is-open" : ""}`}
+            aria-label="Prompts in this chat"
+            onMouseEnter={openPromptMenu}
+            onMouseLeave={schedulePromptMenuClose}
+            onFocusCapture={openPromptMenu}
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) schedulePromptMenuClose();
+            }}
+            onClick={(event) => {
+              if (window.matchMedia("(hover: none)").matches && !event.target.closest(".chat-prompt-menu")) {
+                openPromptMenu();
+              }
+            }}
+          >
+            {promptMenuOpen && (
+              <span
+                className="chat-prompt-hover-triangle"
+                aria-hidden="true"
+                onMouseEnter={openPromptMenu}
+              />
+            )}
+            <div className="chat-prompt-markers" role="group" aria-label="Jump to a prompt">
+              {sessionPrompts.map((prompt, index) => (
+                <button
+                  key={prompt.anchorId}
+                  type="button"
+                  className="chat-prompt-marker"
+                  aria-label={`Jump to prompt ${index + 1}: ${prompt.content}`}
+                  aria-controls="chat-prompt-menu"
+                  aria-expanded={promptMenuOpen}
+                  title={`Prompt ${index + 1}`}
+                  onClick={() => scrollToPrompt(prompt.anchorId)}
+                >
+                  <svg viewBox="0 0 28 14" aria-hidden="true">
+                    <path d="M3 4h17l4 3-4 3H3z" />
+                    <path d="M6 7h12M20 4v6" />
+                    <path d="m24 6 2 1-2 1" />
+                  </svg>
+                </button>
+              ))}
+            </div>
+            <nav
+              id="chat-prompt-menu"
+              className="chat-prompt-menu"
+              aria-label="Choose a prompt"
+              aria-hidden={!promptMenuOpen}
+              onMouseEnter={openPromptMenu}
+            >
+              <p className="chat-prompt-menu-title">Prompts in this chat</p>
+              <div className="chat-prompt-menu-items">
+                {sessionPrompts.map((prompt, index) => (
+                  <button
+                    key={prompt.anchorId}
+                    type="button"
+                    className="chat-prompt-menu-item"
+                    tabIndex={promptMenuOpen ? 0 : -1}
+                    onClick={() => scrollToPrompt(prompt.anchorId)}
+                  >
+                    <span className="chat-prompt-menu-number">{index + 1}</span>
+                    <span className="chat-prompt-menu-text">{prompt.content}</span>
+                  </button>
+                ))}
+              </div>
+            </nav>
+          </aside>
+        )}
 
         <div className="chat-status-bar">
           {isTyping && (
@@ -1227,12 +1357,51 @@ const ThreadSkeleton = () => (
   </div>
 );
 
-const MessageItem = ({ message }) => {
+const BookMascot = ({ stage = "beginning" }) => {
+  if (stage === "hidden") return null;
+
+  const animationStage = stage === "context"
+    ? "opening"
+    : stage === "context_loaded" || stage === "cache" || stage === "rag" || stage === "cache_hit"
+      ? "reading"
+      : stage === "generating"
+      ? "writing"
+      : stage === "caching"
+        ? "saving"
+        : stage === "almost"
+          ? "almost"
+          : stage === "leaving"
+            ? "leaving"
+            : "beginning";
+
+  return (
+    <span className={`book-mascot is-${animationStage}`} aria-hidden="true">
+      <svg className="book-art" viewBox="0 0 24 24" role="presentation">
+        <g className="book-closed">
+          <path d="M5 4.75h12.5A1.5 1.5 0 0 1 19 6.25v13H7a2 2 0 0 1-2-2z" />
+          <path d="M5 17.25a2 2 0 0 1 2-2h12M8 8h7M8 11h6" />
+        </g>
+        <g className="book-open">
+          <path d="M12 7.25c-2.2-1.45-5.2-1.9-8-1.35v13c3-.55 5.8-.1 8 1.35m0-13c2.2-1.45 5.2-1.9 8-1.35v13c-3-.55-5.8-.1-8 1.35" />
+          <path className="book-lines" d="M6.5 9.5c1.2-.1 2.5.05 3.5.45M6.5 12.5c1.2-.1 2.5.05 3.5.45m7.5-3.45c-.75-.08-1.5-.05-2.25.08" />
+          <path className="page-turn" d="M15 6.25c1.35-.4 3.15-.5 5-.35v5.25c-1.7-.15-3.45-.05-5 .35z" />
+          <g className="pencil">
+            <path d="m14.5 17.5 4.9-4.9 1.8 1.8-4.9 4.9-2.7.9z" />
+            <path d="m14.5 17.5-.9 2.7 2.7-.9" />
+          </g>
+          <path className="writing-stroke" d="M13.5 17.5h-2" />
+        </g>
+      </svg>
+    </span>
+  );
+};
+
+const MessageItem = ({ message, anchorId }) => {
   const [copied, setCopied] = useState(false);
 
   if (message.role === "user") {
     return (
-      <article className="chat-message user">
+      <article className="chat-message user" id={anchorId} tabIndex={anchorId ? -1 : undefined}>
         <div>
           <p>{message.content}</p>
         </div>
@@ -1243,17 +1412,18 @@ const MessageItem = ({ message }) => {
   if (message.streaming) {
     return (
       <article className="chat-message assistant is-streaming">
-        <div className="assistant-mark">
-          <img src={noyaLogo} alt="" className="animate-spin" />
+        <div className="assistant-mark has-mascot">
+          {message.mascotStage === "hidden" ? (
+            <img src={noyaLogo} alt="" className="animate-spin" />
+          ) : (
+            <BookMascot stage={message.mascotStage} />
+          )}
         </div>
         <div className="assistant-response">
           {message.content ? (
             <MarkdownRenderer content={message.content} />
           ) : (
-            <div className="streaming-line">
-              <span />
-              <span />
-              <span />
+            <div className="streaming-line" role="status" aria-live="polite">
               <p>{message.status || "Thinking"}</p>
             </div>
           )}

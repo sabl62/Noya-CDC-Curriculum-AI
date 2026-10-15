@@ -54,7 +54,7 @@ if detect() in ("Windows", "Darwin", "Linux"):
         title("01  CONNECT YOUR AI", "Gemini is required. Add up to four keys for reliability.")
         print(f"  Gemini API key: {styled('https://aistudio.google.com/apikey', MINT)}")
 
-        with open(ENV_PATH, "w") as env:
+        with open(ENV_PATH, "a") as env:
             i = 1
 
             while i <= 4:

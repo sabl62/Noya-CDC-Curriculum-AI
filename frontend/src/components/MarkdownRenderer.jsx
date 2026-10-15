@@ -406,7 +406,21 @@ const remarkPipeTables = () => (tree) => {
     for (const match of value.matchAll(tokenPattern)) {
       if (match.index > previousIndex) children.push({ type: "text", value: value.slice(previousIndex, match.index) });
       const token = match[0];
-      if (token.startsWith("$")) children.push({ type: "inlineMath", value: token.slice(1, -1) });
+      if (token.startsWith("$")) {
+        const value = token.slice(1, -1);
+        children.push({
+          type: "inlineMath",
+          value,
+          // remark-math normally adds this data while parsing. These table
+          // nodes are built manually, so provide the same HAST representation
+          // for rehype-katex to render them inside cells.
+          data: {
+            hName: "code",
+            hProperties: { className: ["language-math", "math-inline"] },
+            hChildren: [{ type: "text", value }],
+          },
+        });
+      }
       else if (token.startsWith("**")) children.push({ type: "strong", children: parseInline(token.slice(2, -2)) });
       else if (token.startsWith("`")) children.push({ type: "inlineCode", value: token.slice(1, -1) });
       else children.push({ type: "emphasis", children: parseInline(token.slice(1, -1)) });

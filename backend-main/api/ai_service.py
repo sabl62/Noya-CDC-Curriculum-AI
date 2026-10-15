@@ -150,6 +150,30 @@ def _is_valid_response(text: str) -> bool:
     return not any(marker in lower for marker in _INVALID_RESPONSE_MARKERS)
 
 
+def _has_incomplete_pipe_table(text: str) -> bool:
+    """Catch answers that stop at a Markdown table header before any data row."""
+    lines = (text or "").rstrip().splitlines()
+    tail_rows = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            if tail_rows:
+                break
+            continue
+        if not stripped.startswith("|") or stripped.count("|") < 2:
+            break
+        tail_rows.append(stripped)
+
+    if not tail_rows:
+        return False
+
+    separator = re.compile(r"^\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)+\|?$")
+    # The final line is a separator with no body, or a lone header-like row.
+    if separator.match(tail_rows[0]):
+        return True
+    return len(tail_rows) == 1
+
+
 _GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]
 _DEEPSEEK_MODEL = "deepseek-v4-flash-free"
 _DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1"
@@ -916,12 +940,15 @@ Rules:
                 yield {"type": "status", "stage": "cache", "message": "Remembering..."}
                 cache_decision = cache_service.inspect(message, context, user=user, plan_tier=plan_tier)
 
-                if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
+                if (
+                    cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}
+                    and not _has_incomplete_pipe_table(cache_decision.answer)
+                ):
                     yield {"type": "status", "stage": "cache_hit", "message": ""}
                     yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
                     return
 
-                yield {"type": "status", "stage": "generating", "message": "Almost there..."}
+                yield {"type": "status", "stage": "generating", "message": "Writing your answer..."}
                 system_prompt = f"""You are a Grade 10 CDC study assistant. Answer strictly in English.
 You have been provided with retrieved CDC textbook content for the selected chapter.
 
@@ -949,7 +976,10 @@ CRITICAL RULES:
      ```
    - Flowcharts, cycles, processes, hierarchies: Use ```mermaid code block.
    - Do NOT use TikZ or LaTeX for diagrams.
+10. SOLVING MATHEMATICAL PROBLEMS/DERIVATION : Please Ensure readabilty. Instead of displaying things like : adding x and y: x +y = 13 x = 13 -y..., Please break lines. It shoud be adding x and y: (Break line), x + y =13 (Break line) x = 13 -y (break line).. further steps in similar format. If you're Including Multiple things in one line, seperate them with commas. 
+                                               Give A direct Answer. Instead of saying step 1: do this step 2: do this in the response, Directly Solve the given problem, and at the end , ask something like "Do you want me to explain Each step?".
 
+   
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
 - **CRITICAL: Put a BLANK LINE (empty line) between EVERY step, equation, and text block.** Without blank lines, markdown renders everything as one congested block.
@@ -984,15 +1014,30 @@ INSTRUCTIONS:
                         timeout=60,
                         plan_tier=plan_tier,
                     )
-                    if not _is_valid_response(response):
+                    if not _is_valid_response(response) or _has_incomplete_pipe_table(response):
                         print(f"[AI] Invalid response detected, retrying with different model...")
+                        retry_prompt = user_prompt
+                        if _has_incomplete_pipe_table(response):
+                            retry_prompt += (
+                                "\n\nThe previous draft stopped at a table header. Regenerate the answer "
+                                "with complete data rows. If a table is not suitable, give the answer as "
+                                "concise bullets instead. Never end immediately after a table header."
+                            )
                         response = self._generate(
-                            user_prompt,
+                            retry_prompt,
                             system_prompt,
                             max_output_tokens=8192,
                             timeout=60,
                             plan_tier=_retry_plan_tier(plan_tier),
                         )
+                    if _has_incomplete_pipe_table(response):
+                        yield {
+                            "type": "complete",
+                            "response": "I couldn't complete that table. Please ask me to retry it, or request the formulas as a list.",
+                            "source": f"CDC Textbook - {subject.title()} - {chapter_title}",
+                            "ai_failed": True,
+                        }
+                        return
                     yield {"type": "status", "stage": "caching", "message": "Memorizing..."}
                     cache_service.learn_from_ai(
                         message=message,
@@ -1018,7 +1063,10 @@ INSTRUCTIONS:
         # ─── FALLBACK PATH: Cache → RAG → AI ───
         yield {"type": "status", "stage": "cache", "message": "Remembering..."}
         cache_decision = cache_service.inspect(message, context, user=user, plan_tier=plan_tier)
-        if cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}:
+        if (
+            cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}
+            and not _has_incomplete_pipe_table(cache_decision.answer)
+        ):
             yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
             return
 
@@ -1090,15 +1138,30 @@ INSTRUCTIONS:
                 timeout=30,
                 plan_tier=plan_tier,
             )
-            if not _is_valid_response(response):
+            if not _is_valid_response(response) or _has_incomplete_pipe_table(response):
                 print(f"[AI] Invalid response detected in fallback, retrying...")
+                retry_prompt = user_prompt
+                if _has_incomplete_pipe_table(response):
+                    retry_prompt += (
+                        "\n\nThe previous draft stopped at a table header. Regenerate the answer "
+                        "with complete data rows. If a table is not suitable, give the answer as "
+                        "concise bullets instead. Never end immediately after a table header."
+                    )
                 response = self._generate(
-                    user_prompt,
+                    retry_prompt,
                     system_prompt,
                     max_output_tokens=2048,
                     timeout=30,
                     plan_tier=_retry_plan_tier(plan_tier),
                 )
+            if _has_incomplete_pipe_table(response):
+                yield {
+                    "type": "complete",
+                    "response": "I couldn't complete that table. Please ask me to retry it, or request the formulas as a list.",
+                    "source": source_info if source_info else "AI Generated",
+                    "ai_failed": True,
+                }
+                return
             yield {"type": "status", "stage": "caching", "message": "Almost There..."}
             cache_service.learn_from_ai(
                 message=message,
