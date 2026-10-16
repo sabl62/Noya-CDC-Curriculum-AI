@@ -7,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.http import FileResponse, StreamingHttpResponse
 from django.contrib.auth import get_user_model
+from django.conf import settings
+from django.db import transaction
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -202,6 +204,82 @@ class RegisterView(APIView):
                 'message': 'User created successfully'
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GoogleAuthView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        id_token = request.data.get('id_token')
+        if not isinstance(id_token, str) or not id_token:
+            return Response({'error': 'A Google sign-in token is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            import firebase_admin
+            from firebase_admin import auth as firebase_auth
+            from firebase_admin import credentials
+        except ImportError:
+            logger.exception('Firebase Admin SDK is unavailable')
+            return Response(
+                {'error': 'Google sign-in is not available on this server yet.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            try:
+                app = firebase_admin.get_app()
+            except ValueError:
+                credential_path = getattr(settings, 'FIREBASE_CREDENTIALS_PATH', '')
+                if not credential_path:
+                    return Response(
+                        {'error': 'Google sign-in is not configured on this server yet.'},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+                app = firebase_admin.initialize_app(credentials.Certificate(credential_path))
+        except Exception:
+            logger.exception('Firebase Admin SDK initialization failed')
+            return Response(
+                {'error': 'Google sign-in is not configured correctly on this server.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            claims = firebase_auth.verify_id_token(id_token, app=app)
+        except Exception:
+            logger.exception('Firebase ID token verification failed')
+            return Response({'error': 'Google sign-in could not be verified. Please try again.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        email = (claims.get('email') or '').strip().lower()
+        if not email or not claims.get('email_verified'):
+            return Response({'error': 'Use a verified Google email address to continue.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            user = User.objects.filter(email__iexact=email).first()
+            if user is None:
+                import re
+                import uuid
+
+                local_part = email.partition('@')[0]
+                username_base = re.sub(r'[^a-zA-Z0-9._+-]', '', local_part)[:32] or 'student'
+                username = f'{username_base}_{uuid.uuid4().hex[:8]}'
+                user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=uuid.uuid4().hex + uuid.uuid4().hex,
+                )
+                user.referral_code = user.username[:12] + uuid.uuid4().hex[:4]
+                user.save(update_fields=['referral_code'])
+
+        if not user.is_active:
+            return Response({'error': 'This account is disabled. Contact support for help.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from rest_framework_simplejwt.tokens import RefreshToken
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'user': UserSerializer(user).data,
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+        })
 
 class LogoutView(APIView):
     permission_classes = [permissions.AllowAny]

@@ -7,6 +7,7 @@ from rest_framework_simplejwt.views import (
 
 from .views import (
     RegisterView,
+    GoogleAuthView,
     LogoutView,
     CurrentUserView,
     ChatView,
@@ -37,6 +38,7 @@ urlpatterns = [
     
     # Auth endpoints
     path('auth/register/', RegisterView.as_view(), name='register'),
+    path('auth/google/', GoogleAuthView.as_view(), name='google_auth'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

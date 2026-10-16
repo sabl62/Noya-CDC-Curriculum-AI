@@ -10,6 +10,7 @@ const AuthContext = createContext({
   isLoggedIn: false,
   setIsLoggedIn: noop,
   login: noopAsync,
+  loginWithGoogle: noopAsync,
   signup: noopAsync,
   logout: noop,
   loading: true,
@@ -90,6 +91,30 @@ export const AuthProvider = ({ children }) => {
     return login(username, password);
   };
 
+  const loginWithGoogle = async (idToken) => {
+    try {
+      const { access, refresh, user: userData } = await authAPI.googleLogin(idToken);
+      if (!access || !refresh || !userData) {
+        throw new Error("Invalid Google login response: user or tokens missing");
+      }
+
+      localStorage.setItem("access_token", access);
+      localStorage.setItem("refresh_token", refresh);
+      localStorage.setItem("user", JSON.stringify(userData));
+      localStorage.setItem("is_logged_in", "true");
+      setUser(userData);
+      setIsLoggedIn(true);
+      return userData;
+    } catch (error) {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("user");
+      setIsLoggedIn(false);
+      setUser(null);
+      throw error;
+    }
+  };
+
   const logout = () => {
     try {
       const refresh = localStorage.getItem("refresh_token");
@@ -113,6 +138,7 @@ export const AuthProvider = ({ children }) => {
         isLoggedIn,
         setIsLoggedIn,
         login,
+        loginWithGoogle,
         signup,
         logout,
         loading,

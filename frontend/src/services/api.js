@@ -89,6 +89,7 @@ export const authAPI = {
     return api.post('/auth/login/', { username, password }).then(res => res.data);
   },
   register: (userData) => api.post('/auth/register/', userData).then(res => res.data),
+  googleLogin: (idToken) => api.post('/auth/google/', { id_token: idToken }).then(res => res.data),
   logout: (refreshToken) => api.post('/auth/logout/', { refresh: refreshToken }).then(res => res.data).catch(() => ({})),
   getCurrentUser: () => api.get('/auth/user/'),
   updateProfile: (data) => api.patch('/auth/user/', data),

@@ -50,7 +50,7 @@ const FormField = forwardRef(
             aria-invalid={error ? "true" : undefined}
             aria-describedby={errorId}
             placeholder={placeholder}
-            className="field-input w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-[15px] text-[var(--ink)] outline-none transition-colors duration-150 placeholder:text-[var(--ink-faint)] focus-visible:border-[var(--pine)] focus-visible:ring-2 focus-visible:ring-[var(--pine)]/25"
+            className={`field-input w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-[15px] text-[var(--ink)] outline-none transition-colors duration-150 placeholder:text-[var(--ink-faint)] focus-visible:border-[var(--pine)] focus-visible:ring-2 focus-visible:ring-[var(--pine)]/25${trailing ? " pr-12" : ""}`}
           />
           {trailing}
         </div>
