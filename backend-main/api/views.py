@@ -440,6 +440,7 @@ class ChatView(APIView):
                         if user and user.is_authenticated:
                             saved_context = dict(context or {})
                             saved_context['source'] = event.get('source', '')
+                            saved_context['visual_mode'] = bool(event.get('visual_mode', False))
                             ChatMessage.objects.create(
                                 user=user,
                                 session=session,

@@ -28,6 +28,7 @@ except ImportError:
     RAG_AVAILABLE = False
 
 from .curriculum_scope import (
+    CURRICULUM_TOPICS,
     get_scope_summary,
     is_curriculum_query,
     find_curriculum_focus,
@@ -71,6 +72,44 @@ _STUDY_TERMS = {
 _GEMINI_FREE_MODEL = "gemini-2.5-flash"
 
 _TABLE_FORMATTING_INSTRUCTIONS = """TABLES (Markdown pipe tables): Use a table when the student asks for one or when a compact comparison, classification, vocabulary set, timeline, or parallel facts/formulas will make the answer easier to scan or memorize. Use tables only when the information naturally fits rows and columns; prefer prose or lists for short answers, sequential steps, proofs, and long explanations. Write one row per line with unescaped | separators, a clear header, and a separator row. Keep tables to 2–4 columns with concise cell text. For comparisons, put each item being compared in its own column header; use the first column for comparison features. Never put one of the compared items in the Feature column. For three possible outcomes, use columns Feature, Outcome 1, Outcome 2, Outcome 3, then compare expansion, density, and eventual fate in rows. Include every requested item exactly once as a column. Keep comparison tables to at most four feature rows; keep each cell to one short sentence or phrase. Put a blank line before and after each table. Do not put paragraphs or multi-step reasoning in cells, or repeat the whole table in prose."""
+
+_VISUAL_BLOCK_PATTERN = re.compile(
+    r"\s*```(?:mermaid|venn|noya|noya-graph|noya-activity|noya-geometry)\b[^\n]*\n[\s\S]*?\n```\s*",
+    re.IGNORECASE,
+)
+
+
+def _is_visual_learning_topic(subject: str, message: str) -> bool:
+    if subject in {"math", "omaths", "science"}:
+        return True
+    lowered = (message or "").lower()
+    return any(
+        topic.lower() in lowered
+        for key in ("math", "omaths", "science")
+        for topic in CURRICULUM_TOPICS.get(key, [])
+    )
+
+
+def _learning_format_instructions(visual_mode: bool) -> str:
+    if not visual_mode:
+        return (
+            "RESPONSE FORMAT: Text-only learning response. Use plain language, Markdown, "
+            "and LaTeX for equations. Do not output Mermaid, Venn, chart, visualization, "
+            "or interactive activity code blocks. Do not claim a diagram or activity is included."
+        )
+    return r"""PRO VISUAL LEARNING (Maths and Science only):
+- Teach with concise text, then add one suitable visual and one short interactive activity. Choose a diagram or flowchart for structures/processes; choose a graph for relationships or numerical change. Do not force an irrelevant visual.
+- Flowchart/diagram: a fenced `mermaid` block with valid Mermaid syntax. Keep labels short and Grade 10 appropriate.
+- Geometry: for a right triangle, use a fenced `noya-geometry` JSON block such as {"type":"right-triangle","title":"Right triangle ABC","rightAngleAt":"B","hypotenuse":"AC","midpoint":"D"}. Never draw geometric shapes as Mermaid flowchart nodes or arrows; reserve Mermaid for processes and relationships.
+- Venn diagram: a fenced `venn` block using `sets: A, B` and region keys such as `A_only: 4`, `B_only: 3`, `A_B: 2`.
+- Math/science graph: a fenced `noya-graph` block containing valid JSON with `title`, `xLabel`, `yLabel`, and `points` (2–20 objects, each with numeric `x` and `y`). Example: {"title":"Distance over time","xLabel":"Time (s)","yLabel":"Distance (m)","points":[{"x":0,"y":0},{"x":1,"y":4},{"x":2,"y":8}]}. Use accurate values or clearly label illustrative data.
+- Activity: a fenced `noya-activity` block containing valid JSON. For multiple choice use {"title":"Quick check","prompt":"...","type":"choice","options":["...","..."],"answer":0,"explanation":"..."}; answer is a zero-based option index. For a numeric answer use {"title":"Try it","prompt":"...","type":"number","answer":12,"tolerance":0.1,"unit":"m/s","explanation":"..."}. Make it directly test the explanation and ensure the answer is correct.
+Keep each visual and activity compact. Never put executable code in these blocks."""
+
+
+def _text_only_response(response: str) -> str:
+    cleaned = _VISUAL_BLOCK_PATTERN.sub("\n", response or "").strip()
+    return cleaned or "I couldn't turn that visual into a text answer. Please ask me to explain it in words."
 
 _INVALID_RESPONSE_MARKERS = [
     "name '", "is not defined", "traceback", "syntaxerror",
@@ -897,6 +936,7 @@ Rules:
         plan_tier = str(getattr(user, "plan_tier", "free") or "free").lower()
         if not billing_enabled():
             plan_tier = "free"
+        visual_mode = plan_tier == "paid" and _is_visual_learning_topic(subject, message)
         cache_service = get_semantic_cache_service()
 
         out_of_scope_response = out_of_scope_response_for_subject(subject)
@@ -943,9 +983,10 @@ Rules:
                 if (
                     cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}
                     and not _has_incomplete_pipe_table(cache_decision.answer)
+                    and not visual_mode
                 ):
                     yield {"type": "status", "stage": "cache_hit", "message": ""}
-                    yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
+                    yield {"type": "complete", "response": _text_only_response(cache_decision.answer), "source": cache_decision.source, "cached": True, "visual_mode": False}
                     return
 
                 yield {"type": "status", "stage": "generating", "message": "Writing your answer..."}
@@ -962,6 +1003,7 @@ CRITICAL RULES:
 7. SAMPLE/EXAMPLE GENERATION: When the student explicitly asks you to prepare, create, write, or generate a sample (e.g., "prepare a sample brochure", "give an example of", "write a sample"), you SHOULD create a well-structured example based on the guidelines, structure, or format described in the textbook content. Use the textbook's instructions as a template and fill it with realistic, appropriate content. This is NOT hallucination — it is applying what the textbook teaches. Always note that the sample is an illustrative example based on the chapter's guidelines.
 8. SOLVING A QUESTION OF YOUR CHOICE: When the student asks you to solve any question of your choice from the exercise, Please Specify the Exercise/ Chapter and Question.
 9. DIAGRAMS: When asked to draw, sketch, or illustrate a diagram, use the appropriate format:
+   - Geometric shapes: For a right triangle, use a ```noya-geometry JSON block with type `right-triangle`, rightAngleAt `B`, and hypotenuse `AC`. Do not represent the shape using flowchart nodes or arrows.
    - Venn diagrams: Use ```venn code block with this format:
      ```
      venn
@@ -989,7 +1031,9 @@ FORMATTING RULES:
 
 {_TABLE_FORMATTING_INSTRUCTIONS}
 
-{_LATEX_MATH_INSTRUCTIONS}"""
+{_LATEX_MATH_INSTRUCTIONS}
+
+{_learning_format_instructions(visual_mode)}"""
                 user_prompt = f"""Student Question: {message}
 
 {self._exercise_anchor_note(message, personal_context)}SELECTED CHAPTER TEXTBOOK CONTENT:
@@ -1038,6 +1082,8 @@ INSTRUCTIONS:
                             "ai_failed": True,
                         }
                         return
+                    if not visual_mode:
+                        response = _text_only_response(response)
                     yield {"type": "status", "stage": "caching", "message": "Memorizing..."}
                     cache_service.learn_from_ai(
                         message=message,
@@ -1046,7 +1092,7 @@ INSTRUCTIONS:
                         source=f"CDC Textbook — {subject.title()} — {chapter_title}",
                         model=_model_for("gemini", plan_tier, _GEMINI_FREE_MODEL),
                     )
-                    yield {"type": "complete", "response": response, "source": f"CDC Textbook — {subject.title()} — {chapter_title}"}
+                    yield {"type": "complete", "response": response, "source": f"CDC Textbook — {subject.title()} — {chapter_title}", "visual_mode": visual_mode}
                     return
                 except Exception as e:
                     error_code = getattr(e, "code", classify_provider_error(e))
@@ -1066,8 +1112,9 @@ INSTRUCTIONS:
         if (
             cache_decision.decision in {DECISION_CACHE_HIT, DECISION_KB_HIT}
             and not _has_incomplete_pipe_table(cache_decision.answer)
+            and not visual_mode
         ):
-            yield {"type": "complete", "response": cache_decision.answer, "source": cache_decision.source, "cached": True}
+            yield {"type": "complete", "response": _text_only_response(cache_decision.answer), "source": cache_decision.source, "cached": True, "visual_mode": False}
             return
 
         yield {"type": "status", "stage": "rag", "message": "Searching curriculum database..."}
@@ -1093,7 +1140,7 @@ Do NOT invent facts outside the provided textbook context for factual questions.
 Do NOT invent or guess which question the student is asking about. If the exact question is not in the context, say so and ask for clarification.
 If the question is completely outside the CDC syllabus, reply exactly: {out_of_scope_response}
 {"SAMPLE/EXAMPLE GENERATION: The student is asking for a sample or creative output. Use the textbook's guidelines, structure, or format as a template and create a well-structured example with realistic content. Always note that the sample is illustrative and based on the chapter's guidelines." if is_generative else ""}
-DIAGRAMS: When asked to draw a Venn diagram, use ```venn code block with format: sets: A, B, C / A_only: X% / B_only: Y% / etc. For flowcharts/cycles, use ```mermaid. Do NOT use TikZ.
+DIAGRAMS: For a right triangle, use a ```noya-geometry JSON block with type `right-triangle`, rightAngleAt `B`, and hypotenuse `AC`; never model its shape as a flowchart. For a Venn diagram, use ```venn with sets and region values. Use ```mermaid only for flowcharts and processes. Do NOT use TikZ.
 
 FORMATTING RULES:
 - Use ## for main section headings (## Given, ## To Prove, ## Proof, ## Solution)
@@ -1103,6 +1150,8 @@ FORMATTING RULES:
 - For math solutions, write like a student writes in their notebook: clean, short steps with minimal words
 
 {_TABLE_FORMATTING_INSTRUCTIONS}
+
+{_learning_format_instructions(visual_mode)}
 
 SOLUTION STYLE RULES:
 - Write at Grade 10 level. Use simple, everyday English. No fancy vocabulary.
@@ -1162,6 +1211,8 @@ INSTRUCTIONS:
                     "ai_failed": True,
                 }
                 return
+            if not visual_mode:
+                response = _text_only_response(response)
             yield {"type": "status", "stage": "caching", "message": "Almost There..."}
             cache_service.learn_from_ai(
                 message=message,
@@ -1170,7 +1221,7 @@ INSTRUCTIONS:
                 source=source_info or "AI Generated",
                 model=_model_for("gemini", plan_tier, _GEMINI_FREE_MODEL),
             )
-            yield {"type": "complete", "response": response, "source": source_info if source_info else "General Knowledge"}
+            yield {"type": "complete", "response": response, "source": source_info if source_info else "General Knowledge", "visual_mode": visual_mode}
         except Exception as e:
             error_code = getattr(e, "code", classify_provider_error(e))
             logger.error("AI generation failed on the retrieval path (category=%s, error=%s)", error_code, type(e).__name__)

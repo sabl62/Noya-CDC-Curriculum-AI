@@ -1703,8 +1703,11 @@ html.dark .chat-user-avatar-btn {
 .chat-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   padding: clamp(1.25rem, 3vw, 2.4rem) clamp(1rem, 3vw, 2rem);
 }
 
@@ -2174,6 +2177,7 @@ html.dark .chat-user-avatar-btn {
   font-size: 1rem;
   line-height: 1.72;
   min-width: 0;
+  overflow-wrap: anywhere;
   padding-top: 0.12rem;
 }
 
@@ -2193,6 +2197,261 @@ html.dark .chat-user-avatar-btn {
 
 .assistant-response .markdown-content pre {
   border-radius: 8px;
+}
+
+.mermaid-diagram.is-mindmap {
+  box-sizing: border-box;
+  justify-content: flex-start;
+  padding: 1.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mermaid-svg-host {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: center;
+}
+
+.mermaid-diagram.is-mindmap svg {
+  display: block;
+  width: min(max(100%, 760px), 1020px);
+  max-width: none !important;
+  height: auto !important;
+}
+
+@media (max-width: 700px) {
+  .mermaid-diagram.is-mindmap svg {
+    width: max(100%, 620px);
+  }
+}
+
+.noya-graph {
+  margin: 1.35rem 0;
+  padding: 1rem 1rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.noya-graph figcaption {
+  margin: 0 0 0.4rem 0.4rem;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.noya-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  margin: 0.55rem 0 0;
+  padding: 0 0.35rem;
+  list-style: none;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.noya-graph-legend li { display: inline-flex; align-items: center; gap: 0.4rem; }
+.noya-graph-legend li > span { width: 0.55rem; height: 0.55rem; flex: 0 0 auto; border-radius: 999px; }
+
+.noya-graph-scroll { overflow-x: auto; }
+
+.noya-graph svg {
+  display: block;
+  width: 100%;
+  min-width: 440px;
+  height: auto;
+  overflow: visible;
+}
+
+.noya-graph-grid { stroke: var(--border); stroke-width: 1; }
+.noya-graph-axis { stroke: var(--ink-faint); stroke-width: 1.2; }
+.noya-graph-line { fill: none; stroke: var(--pine); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.noya-graph-point { fill: var(--surface); stroke: var(--pine); stroke-width: 2.5; }
+.noya-graph-tick { fill: var(--ink-soft); font: 12px var(--font-body); }
+.noya-graph-label { fill: var(--ink-soft); font: 13px var(--font-body); }
+
+.noya-geometry {
+  margin: 1.35rem 0;
+  padding: 1rem 1.1rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.noya-geometry figcaption {
+  margin: 0 0 0.45rem;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.noya-geometry svg { display: block; width: min(100%, 640px); height: auto; margin: 0 auto; }
+.noya-geometry-side { fill: none; stroke: var(--ink-soft); stroke-width: 3; stroke-linecap: round; }
+.noya-geometry-hypotenuse { fill: none; stroke: var(--pine); stroke-width: 3.5; stroke-linecap: round; }
+.noya-geometry-median { fill: none; stroke: var(--brass); stroke-width: 2.5; stroke-dasharray: 7 6; }
+.noya-geometry-midpoint-mark { stroke: var(--pine); stroke-width: 2; stroke-linecap: round; }
+.noya-geometry-angle { fill: none; stroke: var(--ink-soft); stroke-width: 2; }
+.noya-geometry-point { fill: var(--surface); stroke: var(--ink-soft); stroke-width: 2.5; }
+.noya-geometry-midpoint { fill: var(--brass); stroke: var(--surface); stroke-width: 2; }
+.noya-geometry-label { fill: var(--ink); font: 600 18px var(--font-body); }
+.noya-geometry-note { fill: var(--ink-soft); font: 13px var(--font-body); }
+.noya-geometry > p { margin: 0.2rem 0 0; color: var(--ink-soft); font-size: 0.84rem; text-align: center; }
+
+.noya-activity {
+  min-width: 0;
+  margin: 1.5rem 0;
+  padding: 1.1rem 1.2rem 1.15rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.noya-activity-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.3rem;
+}
+
+.noya-activity-heading > span {
+  flex: 0 0 auto;
+  color: var(--pine);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.noya-activity h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.noya-activity > p {
+  min-width: 0;
+  margin: 0 0 0.9rem;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.noya-activity-options { display: grid; min-width: 0; gap: 0.5rem; }
+
+.noya-activity-option {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.noya-activity-option-letter {
+  display: inline-grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.noya-activity-option-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.noya-activity-option:hover:not(:disabled) { border-color: var(--pine); }
+.noya-activity-option.selected { border-color: var(--pine); background: var(--pine-tint); }
+.noya-activity-option.selected > .noya-activity-option-letter { border-color: var(--pine); color: var(--pine); }
+.noya-activity-option:disabled { cursor: default; }
+
+.noya-activity-number-label {
+  display: grid;
+  max-width: 18rem;
+  gap: 0.4rem;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.noya-activity-number-label input {
+  min-height: 44px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.noya-activity-submit {
+  min-height: 42px;
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--pine-strong);
+  border-radius: 9px;
+  background: var(--pine-strong);
+  color: #fff;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.noya-activity-submit:disabled { opacity: 0.48; cursor: not-allowed; }
+.dark .noya-activity-submit { border-color: #174532; background: #174532; }
+.noya-activity button:focus-visible,
+.noya-activity input:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+
+.noya-activity-feedback {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.noya-activity-feedback strong { display: flex; align-items: center; gap: 0.4rem; color: var(--ink); }
+.noya-activity-feedback.correct strong { color: var(--pine); }
+.noya-activity-feedback.incorrect strong { color: var(--brass); }
+.noya-visual-error {
+  margin: 1rem 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: 0.85rem;
 }
 
 .streaming-line {
@@ -2659,12 +2918,12 @@ html.dark .chat-user-avatar-btn {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(138, 43, 226, 0.4);
+  background: var(--border-strong);
   border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(138, 43, 226, 0.8);
+  background: var(--ink-faint);
 }
 
 /* Markdown typography */
@@ -2675,10 +2934,10 @@ html.dark .chat-user-avatar-btn {
 }
 .markdown-content code {
   @apply bg-black/5 dark:bg-white/10 px-1.5 py-0.5 rounded font-mono text-sm;
-  color: #8A2BE2;
+  color: var(--pine-strong);
 }
 .dark .markdown-content code {
-  color: #00F0FF;
+  color: var(--pine);
 }
 .markdown-content pre code { 
   @apply bg-transparent p-0 text-inherit; 
@@ -2689,6 +2948,15 @@ html.dark .chat-user-avatar-btn {
 }
 .markdown-content pre {
   @apply bg-slate-900 text-slate-50 p-4 rounded-xl overflow-x-auto my-4 shadow-inner border border-white/10;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+.markdown-content pre code {
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .markdown-content ul { @apply list-disc pl-6 my-3; }
 .markdown-content ol { @apply list-decimal pl-6 my-3; }

@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useId } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import mermaid from "mermaid";
+import { Check } from "lucide-react";
 
-mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "strict", suppressErrorRendering: true });
 
 // Map of language identifiers to display names
 const languageNames = {
@@ -34,6 +35,9 @@ const languageNames = {
   md: "Markdown",
   mermaid: "Mermaid",
   venn: "Venn Diagram",
+  "noya-graph": "Graph Data",
+  "noya-activity": "Learning Activity",
+  "noya-geometry": "Geometry Diagram",
 };
 
 const getLanguageName = (lang) => {
@@ -44,40 +48,50 @@ const getLanguageName = (lang) => {
 // Mermaid diagram renderer
 const MermaidDiagram = ({ code }) => {
   const ref = useRef(null);
-  const [svg, setSvg] = useState("");
-  const [error, setError] = useState(null);
-  const renderedRef = useRef(false);
+  const [rendered, setRendered] = useState(false);
+  const [error, setError] = useState(false);
+  const isMindMap = /^\s*mindmap\b/i.test(code || "");
 
   useEffect(() => {
-    if (!code || renderedRef.current) return;
-    renderedRef.current = true;
+    if (!code || !ref.current) return undefined;
+    let active = true;
+    setRendered(false);
+    setError(false);
     const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const target = ref.current;
     try {
-      mermaid.render(id, code.trim()).then(({ svg: rendered }) => {
-        setSvg(rendered);
-      }).catch((err) => {
-        setError(err.message || "Failed to render diagram");
+      // Mermaid only owns this empty child; drawing into document.body can
+      // briefly add a second scrollbar, while drawing into the React wrapper
+      // can conflict with React's child reconciliation.
+      mermaid.render(id, code.trim(), target).then(({ svg }) => {
+        if (!active) return;
+        target.innerHTML = svg;
+        setRendered(true);
+      }).catch(() => {
+        if (active) setError(true);
       });
-    } catch (err) {
-      setError(err.message || "Failed to render diagram");
+    } catch {
+      setError(true);
     }
+
+    return () => {
+      active = false;
+      target.replaceChildren();
+    };
   }, [code]);
 
   if (error) {
     return (
-      <div className="my-3 rounded-[var(--radius-sm)] border border-red-300 bg-red-50 p-3 text-[13px] text-red-700">
-        Diagram error: {error}
+      <div className="my-3 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface)] p-3 text-[13px] text-[var(--ink-soft)]">
+        This diagram couldn’t be rendered. Ask Noya to redraw it.
       </div>
     );
   }
 
   return (
-    <div ref={ref} className="my-3 flex justify-center overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border)] bg-white p-4">
-      {svg ? (
-        <div dangerouslySetInnerHTML={{ __html: svg }} />
-      ) : (
-        <div className="text-[13px] text-[var(--ink-faint)]">Loading diagram...</div>
-      )}
+    <div className={`mermaid-diagram my-3 flex justify-center overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--border)] bg-white p-4${isMindMap ? " is-mindmap" : ""}`}>
+      <div ref={ref} className="mermaid-svg-host" aria-busy={!rendered} />
+      {!rendered && <div className="text-[13px] text-[var(--ink-faint)]">Loading diagram...</div>}
     </div>
   );
 };
@@ -209,17 +223,263 @@ const VennDiagram = ({ code }) => {
 };
 
 // Code block with language header
-const CodeBlock = ({ children, className }) => {
-  const match = /language-(\w+)/.exec(className || "");
+const NoyaGraph = ({ code }) => {
+  let chart;
+  try {
+    chart = JSON.parse(code);
+  } catch {
+    return <div className="noya-visual-error">This graph could not be displayed.</div>;
+  }
+  const pointIsValid = (point) => Number.isFinite(Number(point?.x))
+    && Number.isFinite(Number(point?.y))
+    && Math.abs(Number(point.x)) <= 1e12
+    && Math.abs(Number(point.y)) <= 1e12;
+  const palette = { blue: "#3b82f6", red: "#ef4444", green: "#15803d", orange: "#ea580c", purple: "#7c3aed" };
+  const rawSeries = Array.isArray(chart?.series)
+    ? chart.series.slice(0, 6)
+    : [{ name: chart?.seriesName || chart?.yLabel || "Value", points: chart?.points, color: "green" }];
+  const series = rawSeries
+    .filter((item) => item && Array.isArray(item.points))
+    .map((item, index) => ({
+      name: typeof item.name === "string" ? item.name.slice(0, 80) : `Series ${index + 1}`,
+      color: palette[String(item.color || "").toLowerCase()] || ["#15803d", "#3b82f6", "#ef4444", "#ea580c", "#7c3aed", "#0f766e"][index],
+      points: item.points.filter(pointIsValid).slice(0, 40).map((point) => ({ x: Number(point.x), y: Number(point.y) })).sort((left, right) => left.x - right.x),
+    }))
+    .filter((item) => item.points.length >= 2);
+  const values = series.flatMap((item) => item.points);
+  if (!values.length) return <div className="noya-visual-error">This graph needs at least two data points per line.</div>;
+
+  const width = 620;
+  const height = 300;
+  // Reserve room for both the rotated y-axis title and its tick labels.
+  const plot = { left: 90, top: 20, right: 20, bottom: 54 };
+  const xMin = Math.min(...values.map((point) => point.x));
+  const xMax = Math.max(...values.map((point) => point.x));
+  const rawYMin = Math.min(...values.map((point) => point.y));
+  const rawYMax = Math.max(...values.map((point) => point.y));
+  const yPadding = rawYMin === rawYMax ? Math.max(1, Math.abs(rawYMin) * 0.15) : (rawYMax - rawYMin) * 0.12;
+  const yMin = rawYMin - yPadding;
+  const yMax = rawYMax + yPadding;
+  const plotWidth = width - plot.left - plot.right;
+  const plotHeight = height - plot.top - plot.bottom;
+  const x = (value) => plot.left + ((value - xMin) / (xMax - xMin || 1)) * plotWidth;
+  const y = (value) => plot.top + ((yMax - value) / (yMax - yMin || 1)) * plotHeight;
+  const ticks = Array.from({ length: 4 }, (_, index) => {
+    const fraction = index / 3;
+    return {
+      x: xMin + (xMax - xMin) * fraction,
+      y: yMin + (yMax - yMin) * fraction,
+    };
+  });
+  const format = (value) => Number(value.toPrecision(3)).toString();
+
+  return (
+    <figure className="noya-graph">
+      <figcaption>{String(chart.title || "Graph")}</figcaption>
+      <div className="noya-graph-scroll">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${String(chart.title || "Graph")}: ${String(chart.xLabel || "x")} versus ${String(chart.yLabel || "y")}`}>
+          {ticks.map((tick, index) => (
+            <g key={`grid-${index}`}>
+              <line x1={plot.left} x2={width - plot.right} y1={y(tick.y)} y2={y(tick.y)} className="noya-graph-grid" />
+              <text x={plot.left - 10} y={y(tick.y) + 4} textAnchor="end" className="noya-graph-tick">{format(tick.y)}</text>
+              <text x={x(tick.x)} y={height - plot.bottom + 19} textAnchor="middle" className="noya-graph-tick">{format(tick.x)}</text>
+            </g>
+          ))}
+          <line x1={plot.left} x2={width - plot.right} y1={height - plot.bottom} y2={height - plot.bottom} className="noya-graph-axis" />
+          <line x1={plot.left} x2={plot.left} y1={plot.top} y2={height - plot.bottom} className="noya-graph-axis" />
+          {series.map((line, seriesIndex) => {
+            const path = line.points.map((point, index) => `${index ? "L" : "M"}${x(point.x)},${y(point.y)}`).join(" ");
+            return (
+              <g key={`series-${seriesIndex}`}>
+                <path d={path} className="noya-graph-line" style={{ stroke: line.color }} />
+                {line.points.map((point, pointIndex) => <circle key={`point-${pointIndex}`} cx={x(point.x)} cy={y(point.y)} r="4" className="noya-graph-point" style={{ stroke: line.color }} />)}
+              </g>
+            );
+          })}
+          <text x={plot.left + plotWidth / 2} y={height - 8} textAnchor="middle" className="noya-graph-label">{String(chart.xLabel || "x")}</text>
+          <text transform={`translate(15 ${plot.top + plotHeight / 2}) rotate(-90)`} textAnchor="middle" className="noya-graph-label">{String(chart.yLabel || "y")}</text>
+        </svg>
+      </div>
+      {series.length > 1 && (
+        <ul className="noya-graph-legend" aria-label="Graph series">
+          {series.map((line, index) => <li key={`legend-${index}`}><span style={{ backgroundColor: line.color }} />{line.name}</li>)}
+        </ul>
+      )}
+    </figure>
+  );
+};
+
+const isRightTriangleDiagram = (code) =>
+  /right[- ]angled triangle|right triangle/i.test(code)
+  && /vertex\s*a\b/i.test(code)
+  && /vertex\s*b\b/i.test(code)
+  && /vertex\s*c\b/i.test(code)
+  && /midpoint[\s\S]{0,80}hypotenuse\s*ac/i.test(code);
+
+const RightTriangleDiagram = ({ title = "Right triangle ABC" }) => (
+  <figure className="noya-geometry">
+    <figcaption>{title}</figcaption>
+    <svg viewBox="0 0 640 380" role="img" aria-label="Right triangle ABC with a right angle at B and midpoint D on hypotenuse AC">
+      <line x1="150" y1="66" x2="150" y2="292" className="noya-geometry-side" />
+      <line x1="150" y1="292" x2="492" y2="292" className="noya-geometry-side" />
+      <line x1="150" y1="66" x2="492" y2="292" className="noya-geometry-hypotenuse" />
+      <line x1="306" y1="177" x2="313" y2="165" className="noya-geometry-midpoint-mark" />
+      <line x1="330" y1="193" x2="336" y2="181" className="noya-geometry-midpoint-mark" />
+      <line x1="150" y1="292" x2="321" y2="179" className="noya-geometry-median" />
+      <path d="M150 264 H178 V292" className="noya-geometry-angle" />
+      <circle cx="150" cy="66" r="5" className="noya-geometry-point" />
+      <circle cx="150" cy="292" r="5" className="noya-geometry-point" />
+      <circle cx="492" cy="292" r="5" className="noya-geometry-point" />
+      <circle cx="321" cy="179" r="6" className="noya-geometry-midpoint" />
+      <text x="126" y="58" textAnchor="end" className="noya-geometry-label">A</text>
+      <text x="126" y="316" textAnchor="end" className="noya-geometry-label">B</text>
+      <text x="507" y="316" className="noya-geometry-label">C</text>
+      <text x="331" y="169" className="noya-geometry-label">D</text>
+      <text x="166" y="322" className="noya-geometry-note">90°</text>
+      <text x="368" y="202" transform="rotate(33.5 368 202)" textAnchor="middle" className="noya-geometry-note">Hypotenuse AC</text>
+      <text x="222" y="242" transform="rotate(-33.5 222 242)" textAnchor="middle" className="noya-geometry-note">Median BD</text>
+    </svg>
+    <p>D is the midpoint of hypotenuse AC, and BD is the median.</p>
+  </figure>
+);
+
+const NoyaGeometry = ({ code }) => {
+  let geometry;
+  try {
+    geometry = JSON.parse(code);
+  } catch {
+    return <div className="noya-visual-error">This geometry diagram could not be displayed.</div>;
+  }
+  if (geometry?.type !== "right-triangle" || geometry?.rightAngleAt !== "B" || geometry?.hypotenuse !== "AC") {
+    return <div className="noya-visual-error">This geometry diagram could not be displayed.</div>;
+  }
+  const title = typeof geometry.title === "string" ? geometry.title.slice(0, 100) : "Right triangle ABC";
+  return <RightTriangleDiagram title={title} />;
+};
+
+const inlineMarkdownComponents = { p: ({ children }) => <>{children}</> };
+
+const MathText = ({ children }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkMath]}
+    rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
+    components={inlineMarkdownComponents}
+  >
+    {String(children ?? "")}
+  </ReactMarkdown>
+);
+
+const NoyaActivity = ({ code }) => {
+  let activity;
+  try {
+    activity = JSON.parse(code);
+  } catch {
+    return <div className="noya-visual-error">This activity could not be displayed.</div>;
+  }
+  const isChoice = activity?.type === "choice"
+    && Array.isArray(activity.options)
+    && activity.options.length >= 2
+    && activity.options.length <= 5
+    && activity.options.every((option) => typeof option === "string" && option.length <= 200)
+    && Number.isInteger(activity.answer)
+    && activity.answer >= 0
+    && activity.answer < activity.options.length;
+  const isNumber = activity?.type === "number" && Number.isFinite(Number(activity.answer));
+  if ((!isChoice && !isNumber) || typeof activity.prompt !== "string" || !activity.prompt || activity.prompt.length > 500) return <div className="noya-visual-error">This activity could not be displayed.</div>;
+
+  return <ActivityCard key={code} activity={activity} isChoice={isChoice} />;
+};
+
+const ActivityCard = ({ activity, isChoice }) => {
+  const activityId = useId();
+  const [selection, setSelection] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const isNumber = activity.type === "number";
+  const answer = Number(activity.answer);
+  const numericCorrect = !isChoice && selection.trim() !== "" && Math.abs(Number(selection) - answer) <= Math.max(0, Number(activity.tolerance) || 0);
+  const correct = isChoice ? Number(selection) === answer : numericCorrect;
+  const canSubmit = isChoice ? selection !== "" : selection.trim() !== "" && Number.isFinite(Number(selection));
+
+  return (
+    <section className="noya-activity" aria-labelledby={activityId}>
+      <div className="noya-activity-heading">
+        <h3 id={activityId}><MathText>{typeof activity.title === "string" ? activity.title : "Check your understanding"}</MathText></h3>
+        <span>Quick check</span>
+      </div>
+      <p><MathText>{activity.prompt}</MathText></p>
+      {isChoice ? (
+        <div className="noya-activity-options" role="group" aria-label="Answer options">
+          {activity.options.map((option, index) => (
+            <button key={`${index}-${option}`} type="button" className={`noya-activity-option${selection === index ? " selected" : ""}`} aria-pressed={selection === index} disabled={submitted} onClick={() => setSelection(index)}>
+              <span className="noya-activity-option-letter">{String.fromCharCode(65 + index)}</span>
+              <span className="noya-activity-option-text"><MathText>{option}</MathText></span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <label className="noya-activity-number-label">
+          <span>Your answer{typeof activity.unit === "string" && activity.unit ? ` (${activity.unit})` : ""}</span>
+          <input type="number" inputMode="decimal" value={selection} disabled={submitted} onChange={(event) => setSelection(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && canSubmit && !submitted) { event.preventDefault(); setSubmitted(true); } }} />
+        </label>
+      )}
+      {!submitted ? (
+        <button type="button" className="noya-activity-submit" disabled={!canSubmit} onClick={() => setSubmitted(true)}>Check answer</button>
+      ) : (
+        <div className={`noya-activity-feedback${correct ? " correct" : " incorrect"}`} role="status">
+          <strong>
+            {correct && <Check size={15} aria-hidden="true" />}
+            {correct ? "Correct" : <>Answer: {isChoice ? <MathText>{activity.options[answer]}</MathText> : `${activity.answer}${typeof activity.unit === "string" && activity.unit ? ` ${activity.unit}` : ""}`}</>}
+          </strong>
+          {activity.explanation && <span><MathText>{activity.explanation}</MathText></span>}
+        </div>
+      )}
+    </section>
+  );
+};
+
+// Code blocks can opt into the Pro-only, safe visual formats.
+const CodeBlock = ({ children, className, richContent }) => {
+  const match = /language-([\w-]+)/.exec(className || "");
   const language = match ? match[1] : null;
   const displayName = getLanguageName(language);
+  const code = String(children ?? "").replace(/\n$/, "");
 
   if (language === "mermaid") {
-    return <MermaidDiagram code={children} />;
+    if (richContent && isRightTriangleDiagram(code)) return <RightTriangleDiagram />;
+    return richContent ? <MermaidDiagram code={code} /> : <pre className="my-3 overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--surface)] p-3 text-sm"><code>{code}</code></pre>;
   }
 
   if (language === "venn") {
-    return <VennDiagram code={children} />;
+    return richContent ? <VennDiagram code={code} /> : <pre className="my-3 overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--surface)] p-3 text-sm"><code>{code}</code></pre>;
+  }
+
+  if (language === "noya-graph") {
+    return richContent ? <NoyaGraph code={code} /> : <pre className="my-3 overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--surface)] p-3 text-sm"><code>{code}</code></pre>;
+  }
+
+  if (language === "noya-geometry") {
+    return richContent ? <NoyaGeometry code={code} /> : <pre className="my-3 overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--surface)] p-3 text-sm"><code>{code}</code></pre>;
+  }
+
+  if (language === "noya-activity") {
+    return richContent ? <NoyaActivity code={code} /> : <pre className="my-3 overflow-x-auto rounded-[var(--radius-sm)] bg-[var(--surface)] p-3 text-sm"><code>{code}</code></pre>;
+  }
+
+  if (language === "noya" && richContent) {
+    try {
+      const visual = JSON.parse(code);
+      if ((visual?.type === "choice" || visual?.type === "number") && visual?.prompt) {
+        return <NoyaActivity code={code} />;
+      }
+      if (visual?.type === "right-triangle") {
+        return <NoyaGeometry code={code} />;
+      }
+      if (Array.isArray(visual?.points) || Array.isArray(visual?.series)) {
+        return <NoyaGraph code={code} />;
+      }
+    } catch {
+      // Keep unrecognized `noya` blocks readable as ordinary code below.
+    }
   }
 
   return (
@@ -597,7 +857,7 @@ const normalizeContent = (content) => {
   }).join("");
 };
 
-const MarkdownRenderer = ({ content, className = "", onQuestionClick }) => {
+const MarkdownRenderer = ({ content, className = "", onQuestionClick, richContent = false }) => {
   const sanitizedContent = normalizeContent(content);
 
   if (!sanitizedContent) return null;
@@ -608,9 +868,12 @@ const MarkdownRenderer = ({ content, className = "", onQuestionClick }) => {
         remarkPlugins={[remarkPipeTables, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
         components={{
+          // CodeBlock owns the complete code/visual presentation. Keeping
+          // react-markdown's outer <pre> would add a dark frame around visuals.
+          pre: ({ children }) => <>{children}</>,
           code: ({ className, children }) => {
             const isInline = !className;
-            return isInline ? <InlineCode>{children}</InlineCode> : <CodeBlock className={className}>{children}</CodeBlock>;
+            return isInline ? <InlineCode>{children}</InlineCode> : <CodeBlock className={className} richContent={richContent}>{children}</CodeBlock>;
           },
           strong: ({ children }) => <strong className="font-bold text-[var(--ink)]">{children}</strong>,
           h1: ({ children }) => <Heading level={1}>{children}</Heading>,
@@ -663,4 +926,7 @@ const ChevronTick = () => (
   </svg>
 );
 
-export default MarkdownRenderer;
+// ChatView updates scroll-related state frequently. Preserve the rendered
+// Markdown subtree while its actual content and display mode stay unchanged,
+// so stateful visuals like Mermaid diagrams are not torn down and restarted.
+export default React.memo(MarkdownRenderer);

@@ -375,6 +375,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
           role: "assistant",
           content: message.response,
           source: (message.context || {}).source,
+          visualMode: Boolean((message.context || {}).visual_mode),
         });
       });
       setMessages(loadedMessages);
@@ -562,6 +563,9 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
 
         if (data.type === "complete") {
           receivedTerminalEvent = true;
+          setMessages((previous) => updateStreamingMessage(previous, streamingId, {
+            visualMode: Boolean(data.visual_mode),
+          }));
           const fullContent = data.response || "I could not generate a response right now.";
           const words = fullContent.split(" ");
           // Keep the preview short even for long math answers so a large
@@ -577,6 +581,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
                 role: "assistant",
                 content: words.slice(0, nextIndex).join(" "),
                 source: data.source,
+                visualMode: Boolean(data.visual_mode),
                 mascotStage: "hidden",
                 streaming: nextIndex < words.length,
                 status: null,
@@ -760,6 +765,7 @@ const ChatView = ({ sessionId: externalSessionId = null, onNewChat, onSessionPen
                 key={`${message.role}-${index}-${message.id || ""}`}
                 message={message}
                 anchorId={message.role === "user" ? `chat-prompt-${index}` : undefined}
+                hasProAccess={hasProAccess}
               />
             ))}
 
@@ -1396,7 +1402,7 @@ const BookMascot = ({ stage = "beginning" }) => {
   );
 };
 
-const MessageItem = ({ message, anchorId }) => {
+const MessageItem = ({ message, anchorId, hasProAccess }) => {
   const [copied, setCopied] = useState(false);
 
   if (message.role === "user") {
@@ -1421,7 +1427,7 @@ const MessageItem = ({ message, anchorId }) => {
         </div>
         <div className="assistant-response">
           {message.content ? (
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={message.content} richContent={Boolean(hasProAccess && message.visualMode)} />
           ) : (
             <div className="streaming-line" role="status" aria-live="polite">
               <p>{message.status || "Thinking"}</p>
@@ -1455,7 +1461,7 @@ const MessageItem = ({ message, anchorId }) => {
          <img src={noyaLogo} alt="" />
       </div>
       <div className="assistant-response">
-        <MarkdownRenderer content={typeof message.content === "string" ? message.content : String(message.content || "")} />
+        <MarkdownRenderer content={typeof message.content === "string" ? message.content : String(message.content || "")} richContent={Boolean(hasProAccess && message.visualMode)} />
         <div className="assistant-actions">
           <button
             className="assistant-action-btn"
